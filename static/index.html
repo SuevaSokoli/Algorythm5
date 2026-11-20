@@ -1,2 +1,49 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Algorythm5</title></head><body><p>Algorythm5</p></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Algorythm5</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/css/tokens.css" />
+    <link rel="stylesheet" href="/static/css/app.css" />
+    <script src="/static/js/theme.js"></script>
+    <script type="module" src="/static/js/main.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <span class="brand__text">
+            <span class="brand__name">Algorythm5</span>
+            <span class="brand__tagline" data-string="tagline"></span>
+          </span>
+        </div>
+        <div class="theme-switch" role="group" aria-label="Color theme">
+          <button type="button" class="theme-switch__option" data-theme-choice="light">Light</button>
+          <button type="button" class="theme-switch__option" data-theme-choice="system">Auto</button>
+          <button type="button" class="theme-switch__option" data-theme-choice="dark">Dark</button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main" class="page">
+      <ol class="stepper" aria-label="Progress"></ol>
+      <section class="view" id="view"></section>
+    </main>
+
+    <dialog class="dialog" id="confirm-dialog" aria-labelledby="confirm-title">
+      <form method="dialog" class="dialog__body">
+        <h2 id="confirm-title" class="dialog__title"></h2>
+        <p class="dialog__text"></p>
+        <div class="dialog__actions">
+          <button type="submit" value="cancel" class="button button--secondary" data-role="cancel"></button>
+          <button type="submit" value="confirm" class="button button--danger" data-role="confirm"></button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
