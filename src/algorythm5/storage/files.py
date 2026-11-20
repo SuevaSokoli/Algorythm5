@@ -49,11 +49,14 @@ class FileStorage:
     def absolute(self, relative: str) -> Path:
         return self._inside_root(relative)
 
+    def delete_job_outputs(self, job_id: str) -> None:
+        shutil.rmtree(self.root / OUTPUTS / validated_job_id(job_id), ignore_errors=True)
+
     def delete_job_files(self, job_id: str) -> None:
         job = validated_job_id(job_id)
         for upload in (self.root / UPLOADS).glob(f"{job}.*"):
             upload.unlink(missing_ok=True)
-        shutil.rmtree(self.root / OUTPUTS / job, ignore_errors=True)
+        self.delete_job_outputs(job)
 
     def _write(self, relative: str, data: bytes) -> None:
         path = self._inside_root(relative)
