@@ -1,0 +1,4 @@
+# Keep text files LF in the repo so golden-file comparisons are stable across OSes.
+* text=auto eol=lf
+*.xlsx binary
+*.png binary
