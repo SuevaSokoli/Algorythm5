@@ -169,10 +169,10 @@ Error envelope `{"error": {"code", "message"}}`. Status codes: 400, 404, 409 (wr
 - **Coverage:** ≥ 90% for `cleaning/`, ≥ 80% overall. Fixtures are **synthetic only**. Bug fixes start with a failing test. Done means the quality gate passes with no new warnings.
 
 ## 10. Git Workflow
-- Not a repo yet; run `git init` (branch `main`) only when the user approves. Short-lived branches off `main`: `feat/…`, `fix/…`, `refactor/…`, `test/…`, `docs/…`, `chore/…`.
+- Repo: `origin` = https://github.com/SuevaSokoli/Algorythm5 (`main` tracks `origin/main`). Short-lived branches off `main`: `feat/…`, `fix/…`, `refactor/…`, `test/…`, `docs/…`, `chore/…`.
 - Conventional Commits: `type(scope): imperative summary` (≤ 72 chars), body explains *why*. Types: `feat fix refactor test docs chore build ci perf style`. Scopes: `ingestion mapping names phones emails dates optouts dedupe export rules db api ui config deps`.
 - One logical change per commit, with its tests. Commit **only when asked**, after showing what is staged.
-- **Never push.** Never force-push, rebase, amend shared commits, `reset --hard` or use `--no-verify`. **Never rewrite history.**
+- **Push only when the user asks** (plain `git push` to `origin`). Never force-push, rebase, amend pushed commits, `reset --hard` or use `--no-verify`. **Never rewrite history.**
 - Never commit `.env`, `data/`, `*.db`, uploads/outputs, real customer files or `.venv/`.
 
 ## 11. Security and Privacy
