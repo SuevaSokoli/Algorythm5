@@ -1,22 +1,26 @@
-// Step 1: drag-and-drop upload with a client-side pre-check (the server is the authority).
+// Step 1: drag-and-drop upload of one or more files, with a client-side pre-check
+// (the server is the authority).
 
 import { api } from "../api.js";
-import { ACCEPTED_EXTENSIONS, MAX_UPLOAD_BYTES, STRINGS } from "../strings.js";
+import { ACCEPTED_EXTENSIONS, MAX_FILES, MAX_UPLOAD_BYTES, STRINGS } from "../strings.js";
 import { el, viewHeader } from "./dom.js";
 
 const T = STRINGS.upload;
 
-function precheck(file) {
-  const name = file.name.toLowerCase();
-  if (!ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext))) return T.wrongType;
-  if (file.size > MAX_UPLOAD_BYTES) return T.tooLarge;
+function precheck(files) {
+  if (files.length > MAX_FILES) return T.tooMany(MAX_FILES);
+  for (const file of files) {
+    const name = file.name.toLowerCase();
+    if (!ACCEPTED_EXTENSIONS.some((ext) => name.endsWith(ext))) return T.wrongType(file.name);
+    if (file.size > MAX_UPLOAD_BYTES) return T.tooLarge(file.name);
+  }
   return null;
 }
 
 export function renderUpload(view, { onUploaded }) {
   const input = el("input", {
     className: "visually-hidden",
-    attrs: { type: "file", accept: ACCEPTED_EXTENSIONS.join(","), id: "file-input", tabindex: "-1" },
+    attrs: { type: "file", accept: ACCEPTED_EXTENSIONS.join(","), id: "file-input", tabindex: "-1", multiple: true },
   });
   const alert = el("div", { className: "alert alert--error", attrs: { role: "alert" } });
   const title = el("p", { className: "dropzone__title", text: T.drop });
@@ -34,10 +38,11 @@ export function renderUpload(view, { onUploaded }) {
   );
   let busy = false;
 
-  async function handle(file) {
-    if (!file || busy) return;
+  async function handle(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length || busy) return;
     alert.textContent = "";
-    const problem = precheck(file);
+    const problem = precheck(files);
     if (problem) {
       alert.textContent = problem;
       return;
@@ -45,10 +50,10 @@ export function renderUpload(view, { onUploaded }) {
     busy = true;
     zone.classList.add("dropzone--busy");
     zone.setAttribute("aria-busy", "true");
-    title.textContent = T.reading;
+    title.textContent = T.reading(files.length);
     try {
-      const created = await api.upload(file);
-      onUploaded(created, file.name);
+      const created = await api.upload(files);
+      onUploaded(created);
     } catch (error) {
       alert.textContent = error.message;
       title.textContent = T.drop;
@@ -67,7 +72,7 @@ export function renderUpload(view, { onUploaded }) {
       input.click();
     }
   });
-  input.addEventListener("change", () => handle(input.files[0]));
+  input.addEventListener("change", () => handle(input.files));
   for (const type of ["dragenter", "dragover"]) {
     zone.addEventListener(type, (event) => {
       event.preventDefault();
@@ -79,17 +84,8 @@ export function renderUpload(view, { onUploaded }) {
   }
   zone.addEventListener("drop", (event) => {
     event.preventDefault();
-    handle(event.dataTransfer.files[0]);
+    handle(event.dataTransfer.files);
   });
 
-  view.append(
-    el(
-      "div",
-      { className: "card" },
-      viewHeader(T.title, T.lead),
-      zone,
-      input,
-      alert,
-    ),
-  );
+  view.append(el("div", { className: "card" }, viewHeader(T.title, T.lead), zone, input, alert));
 }

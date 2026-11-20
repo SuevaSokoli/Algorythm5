@@ -1,6 +1,6 @@
 # Algorythm5
 
-Turns a messy customer export (CSV or Excel) into a **clean, newsletter-ready file**, plus a **change log** and a **review list**. It runs locally on your computer, and no data leaves it.
+Turns one or more messy customer exports (CSV or Excel) into **one clean, newsletter-ready file**, plus a **change log** and a **review list**. It runs locally on your computer, and no data leaves it.
 
 ## What it does
 
@@ -10,6 +10,9 @@ Turns a messy customer export (CSV or Excel) into a **clean, newsletter-ready fi
 - Converts dates to `YYYY-MM-DD`, including Excel serial numbers and Albanian month names.
 - Removes people who opted out. An opt-out always wins.
 - Merges duplicates safely. Uncertain matches go to review instead of being merged.
+- Combines several files (up to 10) with different encodings, separators and column layouts. Every row keeps its `source_file` and `source_row`.
+- Matches columns by header (English or Albanian, in any order) **and** by their values, so missing or wrong headers are caught. You confirm the mapping per file.
+- Same name in two files? Matching email, phone, birth date or address → merged. Conflicting details → kept as two people and listed in the **"Same name, different people"** sheet. The same file uploaded twice is ignored.
 
 Every change is logged with a rule code. The full rules are in [CLAUDE.md](CLAUDE.md) §5.
 
@@ -28,7 +31,7 @@ Copy-Item .env.example .env
 uvicorn algorythm5.web.app:app --host 127.0.0.1 --port 8000
 ```
 
-Open <http://127.0.0.1:8000>, drop in a file, check the columns, and click **Clean my file**.
+Open <http://127.0.0.1:8000>, drop in one or more files, check the columns of each file, and click **Clean my file** (or **Clean and combine N files**).
 
 To try it, use the sample file: `tests/fixtures/sample_customers_messy.xlsx` (or `.csv`). All of its data is invented.
 
@@ -36,7 +39,7 @@ To try it, use the sample file: `tests/fixtures/sample_customers_messy.xlsx` (or
 
 | File | Contents |
 |---|---|
-| `…_report.xlsx` | Sheets: Summary, Clean, Review, Changes, Suppressed, Rejected |
+| `…_report.xlsx` | Sheets: Summary, Clean, Review, Changes, Suppressed, Rejected, Files (per file), Merges, Same name, different people |
 | `…_clean.csv` | The newsletter-ready rows (UTF-8, opens correctly in Excel) |
 | `…_changes.csv` | Every automatic change: row, field, before, after, rule |
 | `…_review.csv` | Rows and values that need a human decision |
@@ -49,7 +52,7 @@ Settings go in `.env` (see `.env.example`):
 - **Unknown consent:** `UNKNOWN_CONSENT_POLICY`, `include` / `review` / `exclude`.
 - **Required channel:** `REQUIRED_CHANNEL`, `email` / `any`.
 - **Date order:** `DATE_ORDER`, `DMY` / `MDY`.
-- **Limits:** file size, rows and columns.
+- **Limits:** file size (`MAX_UPLOAD_MB`, per file), number of files (`MAX_FILES`, default 10), rows and columns.
 - **Retention:** `RETENTION_DAYS`, default 7. Jobs and files are deleted automatically after this many days, or immediately with "Delete this job now".
 
 ## Development

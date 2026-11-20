@@ -37,9 +37,9 @@ function json(method, body) {
 
 export const api = {
   rules: () => request("/api/rules"),
-  upload(file) {
+  upload(files) {
     const form = new FormData();
-    form.append("file", file);
+    for (const file of files) form.append("files", file);
     return request("/api/jobs", { method: "POST", body: form });
   },
   job: (id) => request(`/api/jobs/${encodeURIComponent(id)}`),

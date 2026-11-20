@@ -32,6 +32,23 @@ function statCards(job) {
   );
 }
 
+function fileSummary(job) {
+  const files = job.files || [];
+  if (files.length < 2) return null;
+  const F = T.files;
+  const columns = [F.columns.file, F.columns.rows, F.columns.ready, F.columns.review, F.columns.merged, F.columns.opted_out, F.columns.rejected];
+  const rows = files.map((file) => {
+    const c = file.counts || {};
+    if (file.duplicate_of !== null) {
+      const note = F.ignored(files[file.duplicate_of].filename);
+      return el("tr", {}, el("th", { text: file.filename, attrs: { scope: "row" } }), el("td", { text: note, attrs: { colspan: "6" } }));
+    }
+    const values = [file.rows_in, (c.OK || 0) + (c.FIXED || 0) + (c.REVIEW || 0), c.REVIEW, c.MERGED, c.SUPPRESSED, (c.REJECTED || 0) + (c.BLOCKED || 0)];
+    return el("tr", {}, el("th", { text: file.filename, attrs: { scope: "row" } }), values.map((v) => el("td", { text: formatNumber(v) })));
+  });
+  return el("div", { className: "card" }, el("h2", { className: "section-title", text: F.title }), table(columns, rows), el("p", { className: "muted", text: F.mergeNote }));
+}
+
 function downloads(jobId) {
   return el(
     "div",
@@ -259,6 +276,7 @@ export async function renderResults(view, { jobId, rules, confirm, onRestart, on
     viewHeader(T.title, T.lead),
     statCards(job),
     downloads(jobId),
+    fileSummary(job),
     tabs(
       [
         { id: "review", label: T.tabs.review, count: reviewTotal, content: reviewPanel },

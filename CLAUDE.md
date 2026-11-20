@@ -1,9 +1,9 @@
 # CLAUDE.md — Algorythm5
 
-Source of truth for scope, architecture, cleaning rules and working agreements. Extends the parent `CLAUDE.md`; this file wins on conflict. **Status:** specification only, no code yet.
+Source of truth for scope, architecture, cleaning rules and working agreements. Extends the parent `CLAUDE.md`; this file wins on conflict. **Status:** v1 implemented, plus multi-file merge (ruleset 1.1.0).
 
 ## 1. Overview and Users
-A local web app: a user drops in a messy customer export (CSV/XLSX from an old system) and gets back **(1)** a clean, newsletter-ready file, **(2)** a change log (row, field, old → new, rule code), **(3)** a review list (uncertain items, plain-language reason, suggested fix).
+A local web app: a user drops in one or more messy customer exports (CSV/XLSX from old systems; up to `MAX_FILES=10`, each with its own encoding, delimiter and columns) and gets back **(1)** one a clean, newsletter-ready file, **(2)** a change log (row, field, old → new, rule code), **(3)** a review list (uncertain items, plain-language reason, suggested fix).
 - **Primary user:** non-technical colleague who knows Excel — needs drag-and-drop, plain language, one-click downloads, no jargon. **Secondary:** developer maintaining the rules.
 - **Principles:** never change silently (log everything); never guess (flag + suggest); never lose data (originals kept, extras go to `*_other`); deterministic (same input + settings + `RULESET_VERSION` = identical output); local and private.
 - **Out of scope (v1):** sending newsletters, `.xls`/`.ods`, online email/DNS checks, user accounts, resolving review items in the UI.
@@ -65,7 +65,7 @@ Migrations and the retention purge run at startup; the purge then repeats hourly
 
 **Text normalization** (every cell): repair mojibake (`TXT-001`); NFC; remove zero-width/control chars, NBSP → space (`TXT-002`); trim and collapse spaces (`TXT-003`); normalize apostrophes in names (`TXT-004`).
 
-**Column mapping.** Canonical fields: `customer_id, salutation, first_name, last_name, full_name, email, phone, mobile, phone_extension, company, street, postal_code, city, country, birth_date, signup_date, opt_out, consent, notes`. Confidence: exact synonym 1.0; fuzzy ≥ 90 → 0.8; content sniffing (≥ 80% of a 200-value sample are emails/phones/dates) → 0.6. Synonyms are English + Albanian: `emri`→first_name, `mbiemri`→last_name, `emri i plotë`→full_name, `tel/telefon/celular`→phone, `posta elektronike`→email, `qyteti`→city, `adresa`→street, `datëlindja`→birth_date, `pëlqim`→consent. The user always confirms the mapping. Unmapped columns are kept as passthrough (`MAP-002`). No email or phone column stops the run (`MAP-901`).
+**Column mapping.** Canonical fields: `customer_id, salutation, first_name, last_name, full_name, email, phone, mobile, phone_extension, company, street, postal_code, city, country, birth_date, signup_date, opt_out, consent, notes`. Column order never matters. Confidence: exact synonym 1.0; numbered (`Email 2`) or fuzzy ≥ 90 → 0.8; by values (≥ 80% of a 200-value sample are emails/phones/dates/names) → 0.6. Values overrule a header when < 20% fit it (`MAP-003`); first names are recognised via `first_names.txt`, last names as the name column beside them; full names in a first-name column (no last-name column) → `full_name` (`MAP-003`); a field already used → extra column (`MAP-004`); no header row at all → columns by values (`ING-009`). Each column carries a `reason` shown in the UI. Synonyms are English + Albanian: `emri`→first_name, `mbiemri`→last_name, `emri i plotë`→full_name, `tel/telefon/celular`→phone, `posta elektronike`→email, `qyteti`→city, `adresa`→street, `datëlindja`→birth_date, `pëlqim`→consent. The user always confirms the mapping. Unmapped columns are kept as passthrough (`MAP-002`). No email or phone column stops the run (`MAP-901`).
 
 **Placeholders** are cleared and logged (`PLC-001`): `n/a, none, null, -, --, ?, x, xxx, 0, unknown, test, tbd, asdf, nuk ka, s'ka, pa`; one repeated char (`000000`); sequence or same-digit phones; fake emails (`test@test.com`, `a@a.com`, `noemail@*`, `example.*`). `no/jo/0` are real values in opt-out/consent fields.
 
@@ -90,9 +90,9 @@ Migrations and the retention purge run at startup; the purge then repeats hourly
 
 **Dates:** accept ISO, `DD.MM.YYYY`, `DD/MM/YYYY`, `MM/DD/YYYY`, 2-digit years (pivot on current year; birth dates never in the future), English/Albanian month names (`janar…dhjetor`), Excel serials (base `1899-12-30`, `DAT-002`). Day/month ambiguity: if any value in the column proves the order, use it for the whole column, else `DATE_ORDER` (`DAT-003`); contradicting evidence → warning. Output ISO `YYYY-MM-DD` (`DAT-001`). Unparsable → `DAT-004`; future, before 1900, Excel sentinels, or birth-date age < 13 or > 120 → `DAT-005`.
 
-**Opt-outs** → `consent_status` ∈ `subscribed | opted_out | unknown`. Opt-out terms: `yes/1/x/po/unsubscribed/opt-out/dnc/çabonuar/mos dërgo`; not opted out: `no/0/jo/empty`; a `consent` column means the inverse; unrecognized values → `OPT-004`. When opt-out and consent disagree, opt-out wins (`OPT-005`). An opt-out phrase in notes (`unsubscribe`, `do not contact`, `mos më dërgoni`) suppresses the row as a precaution and lists it for review (`OPT-002`). Confirmed opt-out → `OPT-001`. Unknown consent → `OPT-003`, severity set by `UNKNOWN_CONSENT_POLICY` (include = info, review = warning, exclude = blocking).
+**Opt-outs** → `consent_status` ∈ `subscribed | opted_out | unknown`. Opt-out terms: `yes/1/x/po/unsubscribed/opt-out/dnc/çabonuar/mos dërgo`; not opted out: `no/0/jo/empty`; a `consent` column means the inverse; unrecognized values → `OPT-004`. When opt-out and consent disagree, opt-out wins (`OPT-005`). An opt-out phrase in notes (`unsubscribe`, `do not contact`, `mos më dërgoni`) suppresses the row as a precaution and lists it for review (`OPT-002`). Confirmed opt-out → `OPT-001`. Unknown consent → `OPT-003`, severity set by `UNKNOWN_CONSENT_POLICY` (include = info, review = warning, exclude = blocking). After dedupe, any row whose email opted out in another row is suppressed too (`OPT-006`).
 
-**Duplicates.** Names are compared accent-folded (`ë→e`, `ç→c`), for comparison only. Records are compared only when they share a blocking key: email, phone, or first 3 letters of last name + first initial.
+**Duplicates.** Names are compared accent-folded (`ë→e`, `ç→c`), for comparison only. Records are compared only when they share a blocking key: email, phone, or first 3 letters of last name + first initial. **Multi-file:** files are combined in upload order (record IDs continue; later = newer); a file identical to an earlier one is ignored (`SRC-001`). The **same first + last name in different files** is judged first, on email, phone, birth date and address (street, else postal code, else city): any conflict → kept as different people (`DUP-008`, "Same name, different people" sheet; never merged, even via other links); agreement and no conflict → auto-merge (T4, `DUP-009`); only a matching city or no details → review (`DUP-003`).
 
 | Tier | Condition | Action |
 |---|---|---|
@@ -101,7 +101,7 @@ Migrations and the retention purge run at startup; the purge then repeats hourly
 | T3 | Name ratio ≥ 92 + same city, birth date or postal code | Review only, `DUP-003` |
 | — | Same phone, name ratio < 90 | No merge (families share phones), `DUP-005` |
 
-Matches chain transitively (union-find). **Safety brake:** a group is **not** merged (`DUP-004`) if it has two different valid emails, any name pair below 80, or more than 5 members. **Merge:** survivor = member with the most filled fields (tie → lowest source row); empty fields filled from others in row order; conflicting emails/phones → `*_other`; earliest `signup_date` kept; other conflicts logged (`DUP-006`); any opt-out in the group suppresses the merged record. Survivor gets `source_rows`; the others get `MERGED` + `merged_into`.
+Matches chain transitively (union-find). **Safety brake:** a group is **not** merged (`DUP-004`) if it has two different valid emails, any name pair below 80 (same email + different names → `DUP-007`), a `DUP-008` pair, or more than 5 members. **Merge:** survivor = member with the most filled fields (tie → earliest record); empty fields filled from others; conflicting emails/phones → `*_other`; earliest `signup_date` kept; other conflicts keep the more complete value (one contains the other), else the newer one (`DUP-006`); any opt-out in the group suppresses the merged record. Survivor gets `source_rows` + `source_files`; the others get `MERGED` + `merged_into`.
 
 **Row validation and statuses.** No valid email or phone → `ROW-001`; phone only when `REQUIRED_CHANNEL=email` → `ROW-002` (both blocking). Each row gets the first status that matches:
 
@@ -115,19 +115,19 @@ Matches chain transitively (union-find). **Safety brake:** a group is **not** me
 | `FIXED` | Changed, no warnings | Yes |
 | `OK` | Untouched | Yes |
 
-**Output files** (`<stem>_A5_<YYYYMMDD-HHMM>`): `_report.xlsx` with sheets Summary (counts, top rules, ruleset version, settings), Clean, Review, Changes, Suppressed, Rejected; plus `_clean.csv`, `_changes.csv`, `_review.csv` in UTF-8 **with BOM** (so Excel shows `ë/ç`).
-- Clean columns: `record_id, salutation, first_name, last_name, email, email_other, phone, phone_extension, phone_other, company, street, postal_code, city, country, birth_date, signup_date, consent_status, review_flag, source_rows, <passthrough>`.
-- Review columns: `record_id, source_rows, status, field, rule_code, problem, original_value, current_value, suggestion, related_record_ids`.
+**Output files** (`<stem>_A5_<YYYYMMDD-HHMM>`): `_report.xlsx` with sheets Summary (counts, top rules, ruleset version, settings), Clean, Review, Changes, Suppressed, Rejected, Files (per file), Merges, "Same name, different people"; plus `_clean.csv`, `_changes.csv`, `_review.csv` in UTF-8 **with BOM** (so Excel shows `ë/ç`).
+- Clean columns: `record_id, salutation, first_name, last_name, email, email_other, phone, phone_extension, phone_other, company, street, postal_code, city, country, birth_date, signup_date, consent_status, review_flag, source_rows, source_file, <passthrough>` (`source_rows` is `file:row; …` when the job has several files; Changes also carry `source_file`).
+- Review columns: `record_id, source_rows, source_file, status, field, rule_code, problem, original_value, current_value, suggestion, related_record_ids`.
 - Frozen bold header and auto-filter; phone, postal and ID columns written as text. Formula-injection guard: cells starting with `= + - @`, TAB or CR get a `'` prefix, except validated E.164 phones.
 
-**Rule codes** are defined once in `cleaning/rules.py` (code, severity, plain-language explanation) and never reused for another meaning. Prefixes: `ING TXT MAP PLC NAM PHN EML DAT OPT DUP ROW`. `x9xx` codes stop the whole job (`ING-901` bad file, `ING-902` over limits, `MAP-901` no contact column). Any behavior change bumps `RULESET_VERSION`.
+**Rule codes** are defined once in `cleaning/rules.py` (code, severity, plain-language explanation) and never reused for another meaning. Prefixes: `ING TXT MAP SRC PLC NAM PHN EML DAT OPT DUP ROW`. `x9xx` codes stop the whole job (`ING-901` bad file, `ING-902` over limits, `MAP-901` no contact column). Any behavior change bumps `RULESET_VERSION`.
 
 ## 6. Database Model (SQLite)
 PRAGMAs `foreign_keys=ON`, `journal_mode=WAL`. Numbered SQL migrations tracked in `schema_migrations`, never edited after commit. UUID4 job IDs, UTC ISO timestamps, `ON DELETE CASCADE` from `jobs`.
-- **jobs:** `id, original_filename (sanitized), file_kind (csv|xlsx), stored_upload_path, detected_encoding, detected_delimiter, sheet_name, header_row_index, status (uploaded|mapped|processing|completed|failed), error_code, settings_json, ruleset_version, rows_in, rows_out, created_at, started_at, completed_at, expires_at`.
-- **column_mappings:** `job_id, source_index, source_header, target_field (NULL = passthrough), method (auto|sniffed|manual), confidence`; PK `(job_id, source_index)`.
-- **records:** `job_id, record_id, source_row, raw_json, clean_json, status, consent_status, merged_into, source_rows`; PK `(job_id, record_id)`, index `(job_id, status)`.
-- **changes:** `id, job_id, record_id, source_row, field, old_value, new_value, rule_code, seq`; index `(job_id, rule_code)`.
+- **jobs:** `id, original_filename (sanitized), file_kind (csv|xlsx), stored_upload_path, detected_encoding, detected_delimiter, sheet_name, header_row_index, status (uploaded|mapped|processing|completed|failed), error_code, settings_json, ruleset_version, rows_in, rows_out, created_at, started_at, completed_at, expires_at` (file fields = first file). **job_files** (0002): `job_id, file_index, original_filename (unique per job), file_kind, stored_upload_path, detected_encoding, detected_delimiter, sheet_name, header_row_index, rows_in, sha256, duplicate_of`.
+- **column_mappings:** `job_id, file_index, source_index, source_header, target_field (NULL = passthrough), method (auto|sniffed|manual), confidence, reason`; PK `(job_id, file_index, source_index)`.
+- **records:** `job_id, record_id, source_row, source_file, raw_json, clean_json, status, consent_status, merged_into, source_rows`; PK `(job_id, record_id)`, index `(job_id, status)`.
+- **changes:** `id, job_id, record_id, source_file, source_row, field, old_value, new_value, rule_code, seq`; index `(job_id, rule_code)`.
 - **issues:** `id, job_id, record_id (NULL = job-level), field, rule_code, severity, message, original_value, suggestion, related_record_ids`.
 - **output_files:** `job_id, kind (report_xlsx|clean_csv|changes_csv|review_csv), stored_path, download_name, size_bytes, sha256, created_at`.
 - **Retention:** jobs and files purged after `RETENTION_DAYS=7`, or immediately on delete.
@@ -138,9 +138,9 @@ Error envelope `{"error": {"code", "message"}}`. Status codes: 400, 404, 409 (wr
 |---|---|---|
 | GET | `/api/health` | Liveness + `ruleset_version` |
 | GET | `/api/rules` | Rule legend `[{code, severity, explanation}]` |
-| POST | `/api/jobs` | Multipart upload → `201 {job_id, encoding, sheet_name, columns+proposed mapping, preview (10 rows)}` |
-| GET | `/api/jobs/{id}` | Status + counts per status |
-| PUT | `/api/jobs/{id}/mapping` | Confirm/edit mapping `{columns:[{index, target_field\|null}]}` → status `mapped` |
+| POST | `/api/jobs` | Multipart `files` (several) or `file` → `201 {job_id, files:[{index, filename, encoding, delimiter, rows, duplicate_of, columns+proposed mapping, preview}]}` |
+| GET | `/api/jobs/{id}` | Status + counts per status + `files` with per-file counts |
+| PUT | `/api/jobs/{id}/mapping` | `{columns:[{file_index, index, target_field\|null}]}`; each used file needs a contact column → `mapped` |
 | POST | `/api/jobs/{id}/run` | Start cleaning as background task → `202`; `409` if not mapped or already run |
 | GET | `/api/jobs/{id}/summary` | Counts, top rules, ruleset version |
 | GET | `/api/jobs/{id}/changes` | Paginated change log `?page&page_size(≤200)&rule_code&field` |
@@ -150,7 +150,7 @@ Error envelope `{"error": {"code", "message"}}`. Status codes: 400, 404, 409 (wr
 | GET | `/` | Frontend |
 
 ## 8. UI Requirements
-- **Flow (one page, 4 steps):** 1) **Upload** — drag-and-drop zone that is also a button; type and size limits in plain words. 2) **Check columns** — each source column shows header, 3 sample values, target dropdown and a confidence chip (Sure/Likely/Guess); 10-row preview. 3) **Cleaning** — progress state polling every second, `aria-live` status. 4) **Results** — summary cards (received, ready, fixed, needs review, merged, opted out, couldn't use); primary "Download clean file (.xlsx)" plus secondary downloads; filterable Review and Changes tabs; "Delete job" (with confirmation) and "Clean another file".
+- **Flow (one page, 4 steps):** 1) **Upload** — multi-file drag-and-drop zone that is also a button; type, size and count limits in plain words. 2) **Check columns** — one card per file (encoding, delimiter, rows; repeated file notice); each column shows header, 3 sample values, target dropdown, a confidence chip (Sure/Likely/Guess) and its reason; collapsible 10-row preview. 3) **Cleaning** — progress state polling every second, `aria-live` status. 4) **Results** — summary cards (received, ready, fixed, needs review, merged, opted out, couldn't use); primary "Download clean file (.xlsx)" plus secondary downloads; per-file summary table (several files); filterable Review and Changes tabs; "Delete job" (with confirmation) and "Clean another file".
 - **Modern, pretty:** design tokens as CSS variables in `tokens.css` (no hardcoded colors); 8-px spacing scale; 12-px rounded cards with soft shadows; one accent color plus success/warning/danger; system font stack; transitions ≤ 200 ms that respect `prefers-reduced-motion`.
 - **Dark mode:** follows `prefers-color-scheme`; light/dark/system toggle stored in `localStorage` (try/catch) and applied before first paint.
 - **Responsive:** mobile-first from 360 px; no horizontal page scroll (tables scroll in their container); summary cards in 1/2/4 columns.

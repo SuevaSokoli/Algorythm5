@@ -66,16 +66,8 @@ function goUpload(notice) {
   });
 }
 
-async function goMapping(created, fileName) {
-  let rowCount = created.preview.length;
-  try {
-    rowCount = (await api.job(created.job_id)).rows_in ?? rowCount;
-  } catch {
-    /* the preview length is a fine fallback for the file info line */
-  }
-  show(STEP.mapping, (container) =>
-    renderMapping(container, { created, fileName, rowCount, onStarted: goProgress, onBack: () => goUpload() }),
-  );
+function goMapping(created) {
+  show(STEP.mapping, (container) => renderMapping(container, { created, onStarted: goProgress, onBack: () => goUpload() }));
 }
 
 function goProgress(jobId) {
