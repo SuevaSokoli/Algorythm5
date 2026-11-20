@@ -37,6 +37,45 @@ def test_fix_case(raw: str, expected: str) -> None:
     assert names.fix_case(raw) == expected
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("aNa", "Ana"),
+        ("aNa hOxha", "Ana Hoxha"),
+        ("ANa HoXHA", "Ana Hoxha"),
+        ("hOxha-kOLA", "Hoxha-Kola"),
+        ("ËrMIRA çELA", "Ërmira Çela"),
+        ("xHEMAL", "Xhemal"),
+        ("o'bRIEN", "O'Brien"),
+        ("mcDONALD", "McDonald"),
+        ("Ana Hoxha", "Ana Hoxha"),  # already correct: no change
+        ("McDonald", "McDonald"),
+        ("DiCaprio", "DiCaprio"),
+        ("O'Brien", "O'Brien"),
+        ("Anna-Maria", "Anna-Maria"),
+        ("Ludwig van Beethoven", "Ludwig van Beethoven"),
+        ("Gjergj III", "Gjergj III"),
+        ("Ana hOxha van Dijk", "Ana Hoxha van Dijk"),
+    ],
+)
+def test_fix_case_repairs_random_mixed_case_in_names(raw: str, expected: str) -> None:
+    assert names.fix_case(raw, fix_mixed=True) == expected
+
+
+def test_mixed_case_outside_names_is_kept() -> None:
+    assert names.fix_case("IBM Albania", particles=False) == "IBM Albania"
+
+
+def test_name_stage_fixes_mixed_case(settings: PipelineSettings) -> None:
+    record = make_record(first_name="aNa", last_name="hOxha", company="IBM Albania")
+    result = names.apply([record], settings)
+    values = result.records[0].values
+    assert (values["first_name"], values["last_name"], values["company"]) == (
+        "Ana", "Hoxha", "IBM Albania",
+    )  # fmt: skip
+    assert {c.rule_code for c in result.changes} == {"NAM-001"}
+
+
 def test_particles_not_lowered_outside_name_fields() -> None:
     assert names.fix_case("RRUGA DE GASPERI", particles=False) == "Rruga De Gasperi"
 

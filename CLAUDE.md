@@ -1,6 +1,6 @@
 # CLAUDE.md — Algorythm5
 
-Source of truth for scope, architecture, cleaning rules and working agreements. Extends the parent `CLAUDE.md`; this file wins on conflict. **Status:** v1 implemented, plus multi-file merge (ruleset 1.1.0).
+Source of truth for scope, architecture, cleaning rules and working agreements. Extends the parent `CLAUDE.md`; this file wins on conflict. **Status:** v1 implemented, plus multi-file merge (ruleset 1.2.0).
 
 ## 1. Overview and Users
 A local web app: a user drops in one or more messy customer exports (CSV/XLSX from old systems; up to `MAX_FILES=10`, each with its own encoding, delimiter and columns) and gets back **(1)** one a clean, newsletter-ready file, **(2)** a change log (row, field, old → new, rule code), **(3)** a review list (uncertain items, plain-language reason, suggested fix).
@@ -72,7 +72,7 @@ Migrations and the retention purge run at startup; the purge then repeats hourly
 **Names** (casing also reused for city/street/company):
 - Full-name split (`NAM-004`): `LAST, FIRST`, otherwise first token = first name, rest = last name. More than 3 tokens or a single token → warning `NAM-008`.
 - Titles → `salutation` (`NAM-002`): `Mr, Mrs, Ms, Dr, Prof`, Albanian `Z., Znj., Zsh., Ing., Av.`. Suffixes `Jr. Sr. II III IV` normalized (`NAM-003`).
-- Casing (`NAM-001`) applies **only** to all-caps or all-lowercase values; mixed case is left alone. Capitalize each word and hyphen segment (`ANNA-MARIA`→`Anna-Maria`). Albanian letters use Unicode casing (`ËRMIRA`→`Ërmira`, `ÇELA`→`Çela`); letter pairs (Dh Gj Ll Nj Rr Sh Th Xh Zh) keep only the first letter upper (`XHEMAL`→`Xhemal`). `MCDONALD`→`McDonald`; `Mac` only for names in `mac_surnames.txt` (`Macedo`, `Mack` unchanged). `O'BRIEN`→`O'Brien`, `D'ANGELO`→`D'Angelo`. Particles (van, von, de, di, da, del, la, le, bin) lowercase unless first token.
+- Casing (`NAM-001`): all-caps or all-lowercase values are fixed; in first/last names, randomly mixed words (`aNa hOxha`→`Ana Hoxha`) are fixed too, while deliberate forms (`McDonald`, `DiCaprio`, `van Dijk`) are kept. Company/street/city keep mixed case (`IBM`). Capitalize each word and hyphen segment (`ANNA-MARIA`→`Anna-Maria`). Albanian letters use Unicode casing (`ËRMIRA`→`Ërmira`, `ÇELA`→`Çela`); letter pairs (Dh Gj Ll Nj Rr Sh Th Xh Zh) keep only the first letter upper (`XHEMAL`→`Xhemal`). `MCDONALD`→`McDonald`; `Mac` only for names in `mac_surnames.txt` (`Macedo`, `Mack` unchanged). `O'BRIEN`→`O'Brien`, `D'ANGELO`→`D'Angelo`. Particles (van, von, de, di, da, del, la, le, bin) lowercase unless first token.
 - Warnings: digits/symbols (`NAM-005`), identical first and last name (`NAM-006`), lost characters `?`/`�` (`NAM-007`, never guess the letter); initial only → info `NAM-009`. Never add or remove diacritics.
 
 **Phones** (region from `DEFAULT_PHONE_REGION`, overridden by a `country` column):

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from algorythm5.cleaning.models import Change, Flag, Issue, Record, Severity, StageResult, Step
 
 # Bump on ANY change to cleaning behaviour (see CLAUDE.md §5 and §12).
-RULESET_VERSION = "1.1.0"
+RULESET_VERSION = "1.2.0"
 
 INFO, WARN, BLOCK = Severity.INFO, Severity.WARNING, Severity.BLOCKING
 

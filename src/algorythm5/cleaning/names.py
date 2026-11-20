@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
+from itertools import pairwise
 
 from algorythm5.cleaning.data import load_lines, load_pairs
 from algorythm5.cleaning.models import PipelineSettings, Record, StageResult
@@ -20,6 +21,7 @@ _ROMAN_SUFFIXES = frozenset({"ii", "iii", "iv"})
 _ALLOWED_SYMBOLS = frozenset(" -'.")
 _LOST_CHARACTERS = frozenset("?�")
 _INITIAL = re.compile(r"^\w\.?$")
+_NAME_SEGMENT_SPLIT = re.compile(r"[-']")  # apostrophes are normalized earlier (TXT-004)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,25 +67,55 @@ def _capitalize_segment(segment: str) -> str:
 
 
 def needs_casing(value: str) -> bool:
-    """Casing is fixed only for ALL-CAPS or all-lowercase values; mixed case is intentional."""
+    """ALL-CAPS and all-lowercase values always get the casing fix."""
     return value.isupper() or value.islower()
 
 
-def fix_case(value: str, *, particles: bool = True) -> str:
-    """Title-case an all-caps/all-lowercase name. Mixed-case input is returned unchanged."""
-    if not needs_casing(value):
+def _well_formed_segment(segment: str) -> bool:
+    """'Ana', 'McDonald', 'DiCaprio': starts upper; any other capital follows a lowercase letter."""
+    letters = [ch for ch in segment if ch.isalpha()]
+    if not letters:
+        return True
+    if not letters[0].isupper():
+        return False
+    return all(not cur.isupper() or prev.islower() for prev, cur in pairwise(letters))
+
+
+def _well_formed_word(word: str, position: int) -> bool:
+    bare = word.lower().rstrip(".")
+    if word.islower() and bare in _particles():  # 'van Dijk', 'Ludwig van Beethoven'
+        return True
+    if position > 0 and bare in _ROMAN_SUFFIXES and word.isupper():
+        return True
+    return all(_well_formed_segment(part) for part in _NAME_SEGMENT_SPLIT.split(word))
+
+
+def _fix_word(word: str, position: int, particles: bool) -> str:
+    bare = word.lower().rstrip(".")
+    if particles and position > 0 and bare in _particles():
+        return word.lower()
+    if position > 0 and bare in _ROMAN_SUFFIXES:
+        return word.upper()
+    return "-".join(_capitalize_segment(part) for part in word.split("-"))
+
+
+def fix_case(value: str, *, particles: bool = True, fix_mixed: bool = False) -> str:
+    """Title-case a name written in ALL CAPS or all lowercase.
+
+    With `fix_mixed` (person names), randomly mixed words such as 'aNa hOxha' are fixed
+    too, word by word; deliberate forms like 'McDonald', 'DiCaprio' or 'van Dijk' are kept.
+    Other fields (company, street) keep mixed case, so 'IBM Albania' stays as it is.
+    """
+    all_one_case = needs_casing(value)
+    if not all_one_case and not fix_mixed:
         return value
     words = value.split(" ")
-    result: list[str] = []
-    for position, word in enumerate(words):
-        bare = word.lower().rstrip(".")
-        if particles and position > 0 and bare in _particles():
-            result.append(word.lower())
-        elif position > 0 and bare in _ROMAN_SUFFIXES:
-            result.append(word.upper())
-        else:
-            result.append("-".join(_capitalize_segment(part) for part in word.split("-")))
-    return " ".join(result)
+    return " ".join(
+        _fix_word(word, position, particles)
+        if all_one_case or not _well_formed_word(word, position)
+        else word
+        for position, word in enumerate(words)
+    )
 
 
 def normalize_suffix(value: str) -> str:
@@ -178,7 +210,7 @@ def _apply_titles(record: Record, values: dict[str, str], log: StageLog) -> None
 def _apply_casing(record: Record, values: dict[str, str], log: StageLog) -> None:
     for field in ("first_name", "last_name"):
         old = values.get(field, "")
-        values[field] = fix_case(old)
+        values[field] = fix_case(old, fix_mixed=True)
         log.change(record, field, old, values[field], "NAM-001")
     last = values.get("last_name", "")
     values["last_name"] = normalize_suffix(last)

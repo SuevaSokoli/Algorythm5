@@ -56,7 +56,7 @@ def completed_job(client: TestClient) -> str:
 
 def test_health_rules_and_security_headers(client: TestClient) -> None:
     response = client.get("/api/health")
-    assert response.json() == {"status": "ok", "ruleset_version": "1.1.0"}
+    assert response.json() == {"status": "ok", "ruleset_version": "1.2.0"}
     assert response.headers["cache-control"] == "no-store"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-content-type-options"] == "nosniff"
@@ -97,7 +97,7 @@ def test_full_flow(client: TestClient) -> None:
     assert client.post(f"/api/jobs/{job_id}/run").status_code == 409  # cannot run twice
 
     summary = client.get(f"/api/jobs/{job_id}/summary").json()
-    assert summary["rows_out"] == 2 and summary["ruleset_version"] == "1.1.0"
+    assert summary["rows_out"] == 2 and summary["ruleset_version"] == "1.2.0"
     assert summary["top_rules"][0]["explanation"]
 
     changes = client.get(f"/api/jobs/{job_id}/changes", params={"page_size": 2}).json()
