@@ -7,6 +7,7 @@ from enum import StrEnum
 from functools import cache
 
 from algorythm5.cleaning.data import load_pairs
+from algorythm5.cleaning.duplicates import emails_of
 from algorythm5.cleaning.models import (
     ConsentStatus,
     PipelineSettings,
@@ -118,3 +119,33 @@ def apply(records: Sequence[Record], settings: PipelineSettings) -> StageResult:
         values["consent_status"] = _classify(record, settings, log).value
         cleaned.append(record.with_values(values))
     return log.result(cleaned)
+
+
+def propagate_by_email(records: Sequence[Record], settings: PipelineSettings) -> StageResult:
+    """Opt-out always wins: a row whose email opted out anywhere else is suppressed too.
+
+    Runs after duplicate merging, so it covers rows that were kept apart (for example the
+    same address used under two different names, or in a file uploaded later).
+    """
+    del settings
+    log = StageLog()
+    opted_out = ConsentStatus.OPTED_OUT.value
+    live = [r for r in records if not r.merged_into]
+    blocked: dict[str, str] = {}
+    for record in live:
+        if record.get("consent_status") == opted_out:
+            for email in emails_of(record):
+                blocked.setdefault(email, record.record_id)
+    result: list[Record] = []
+    for record in records:
+        email = record.get("email")
+        source = blocked.get(email)
+        if record.merged_into or record.get("consent_status") == opted_out or source is None:
+            result.append(record)
+            continue
+        values = dict(record.values)
+        log.change(record, "consent_status", values.get("consent_status", ""), opted_out, "OPT-006")
+        values["consent_status"] = opted_out
+        log.issue(record, "consent_status", "OPT-006", original_value=email, related=[source])
+        result.append(record.with_values(values))
+    return log.result(result)

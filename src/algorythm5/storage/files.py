@@ -29,10 +29,14 @@ class FileStorage:
             raise ValueError("path escapes the data directory")
         return path
 
-    def save_upload(self, job_id: str, extension: str, data: bytes) -> str:
+    def save_upload(self, job_id: str, extension: str, data: bytes, file_index: int = 0) -> str:
+        """Store an upload as <uuid>.<ext> (first file) or <uuid>_<n>.<ext> (later files)."""
         if extension not in ALLOWED_EXTENSIONS:
             raise ValueError(f"unsupported extension {extension}")
-        relative = f"{UPLOADS}/{validated_job_id(job_id)}.{extension}"
+        if file_index < 0:
+            raise ValueError("file index must not be negative")
+        suffix = f"_{file_index}" if file_index else ""
+        relative = f"{UPLOADS}/{validated_job_id(job_id)}{suffix}.{extension}"
         self._write(relative, data)
         return relative
 
@@ -54,8 +58,9 @@ class FileStorage:
 
     def delete_job_files(self, job_id: str) -> None:
         job = validated_job_id(job_id)
-        for upload in (self.root / UPLOADS).glob(f"{job}.*"):
-            upload.unlink(missing_ok=True)
+        for pattern in (f"{job}.*", f"{job}_*.*"):
+            for upload in (self.root / UPLOADS).glob(pattern):
+                upload.unlink(missing_ok=True)
         self.delete_job_outputs(job)
 
     def _write(self, relative: str, data: bytes) -> None:

@@ -37,12 +37,32 @@ UPDATABLE_JOB_COLUMNS = frozenset(JOB_COLUMNS) - {"id", "created_at"}
 
 
 @dataclass(frozen=True, slots=True)
+class JobFileRow:
+    file_index: int
+    original_filename: str
+    file_kind: str
+    stored_upload_path: str
+    detected_encoding: str | None
+    detected_delimiter: str | None
+    sheet_name: str | None
+    header_row_index: int | None
+    rows_in: int
+    sha256: str
+    duplicate_of: int | None
+
+
+JOB_FILE_COLUMNS = tuple(f.name for f in fields(JobFileRow))
+
+
+@dataclass(frozen=True, slots=True)
 class MappingRow:
     source_index: int
     source_header: str
     target_field: str | None
     method: str
     confidence: float
+    reason: str = ""
+    file_index: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +75,7 @@ class RecordRow:
     consent_status: str | None
     merged_into: str | None
     source_rows: str
+    source_file: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +87,7 @@ class ChangeRow:
     new_value: str
     rule_code: str
     seq: int
+    source_file: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +163,26 @@ class JobRepository:
         return [row["id"] for row in rows]
 
 
+class JobFileRepository:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._db = connection
+
+    def insert_many(self, job_id: str, files: Iterable[JobFileRow]) -> None:
+        marks = ", ".join("?" for _ in ("job_id", *JOB_FILE_COLUMNS))
+        self._db.executemany(
+            f"INSERT INTO job_files (job_id, {', '.join(JOB_FILE_COLUMNS)}) VALUES ({marks})",  # noqa: S608 - whitelisted columns
+            [(job_id, *astuple(f)) for f in files],
+        )
+
+    def list(self, job_id: str) -> list[JobFileRow]:
+        rows = self._db.execute(
+            f"SELECT {', '.join(JOB_FILE_COLUMNS)} FROM job_files "  # noqa: S608 - whitelisted columns
+            "WHERE job_id = ? ORDER BY file_index",
+            (job_id,),
+        )
+        return [JobFileRow(*row) for row in rows]
+
+
 class MappingRepository:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._db = connection
@@ -149,14 +191,14 @@ class MappingRepository:
         self._db.execute("DELETE FROM column_mappings WHERE job_id = ?", (job_id,))
         self._db.executemany(
             "INSERT INTO column_mappings (job_id, source_index, source_header, target_field, "
-            "method, confidence) VALUES (?, ?, ?, ?, ?, ?)",
+            "method, confidence, reason, file_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [(job_id, *astuple(m)) for m in mappings],
         )
 
     def list(self, job_id: str) -> list[MappingRow]:
         rows = self._db.execute(
-            "SELECT source_index, source_header, target_field, method, confidence "
-            "FROM column_mappings WHERE job_id = ? ORDER BY source_index",
+            "SELECT source_index, source_header, target_field, method, confidence, reason, "
+            "file_index FROM column_mappings WHERE job_id = ? ORDER BY file_index, source_index",
             (job_id,),
         )
         return [MappingRow(*row) for row in rows]
@@ -169,7 +211,8 @@ class RecordRepository:
     def insert_many(self, job_id: str, records: Iterable[RecordRow]) -> None:
         self._db.executemany(
             "INSERT INTO records (job_id, record_id, source_row, raw_json, clean_json, status, "
-            "consent_status, merged_into, source_rows) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "consent_status, merged_into, source_rows, source_file) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(job_id, *astuple(r)) for r in records],
         )
 
@@ -179,6 +222,17 @@ class RecordRepository:
         )
         return {row["status"]: row["n"] for row in rows}
 
+    def status_counts_by_file(self, job_id: str) -> dict[str, dict[str, int]]:
+        rows = self._db.execute(
+            "SELECT source_file, status, COUNT(*) AS n FROM records WHERE job_id = ? "
+            "GROUP BY source_file, status",
+            (job_id,),
+        )
+        counts: dict[str, dict[str, int]] = {}
+        for row in rows:
+            counts.setdefault(row["source_file"], {})[row["status"]] = row["n"]
+        return counts
+
     def get_many(self, job_id: str, record_ids: Iterable[str]) -> dict[str, RecordRow]:
         ids = sorted(set(record_ids))
         if not ids:
@@ -186,7 +240,8 @@ class RecordRepository:
         marks = ", ".join("?" for _ in ids)
         rows = self._db.execute(
             "SELECT record_id, source_row, raw_json, clean_json, status, consent_status, "  # noqa: S608 - only "?" placeholders are interpolated
-            f"merged_into, source_rows FROM records WHERE job_id = ? AND record_id IN ({marks})",
+            f"merged_into, source_rows, source_file FROM records "
+            f"WHERE job_id = ? AND record_id IN ({marks})",
             (job_id, *ids),
         )
         return {row["record_id"]: RecordRow(*row) for row in rows}
@@ -199,7 +254,7 @@ class ChangeRepository:
     def insert_many(self, job_id: str, changes: Iterable[ChangeRow]) -> None:
         self._db.executemany(
             "INSERT INTO changes (job_id, record_id, source_row, field, old_value, new_value, "
-            "rule_code, seq) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "rule_code, seq, source_file) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [(job_id, *astuple(c)) for c in changes],
         )
 
@@ -225,7 +280,8 @@ class ChangeRepository:
             params,
         ).fetchone()[0]
         rows = self._db.execute(
-            "SELECT record_id, source_row, field, old_value, new_value, rule_code, seq "  # noqa: S608 - condition is built from fixed fragments
+            "SELECT record_id, source_row, field, old_value, new_value, rule_code, seq, "  # noqa: S608 - condition is built from fixed fragments
+            "source_file "
             f"FROM changes WHERE {condition} ORDER BY seq LIMIT ? OFFSET ?",
             [*params, page_size, _offset(page, page_size)],
         )

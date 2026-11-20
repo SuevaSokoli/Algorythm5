@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from algorythm5.cleaning.models import Change, Flag, Issue, Record, Severity, StageResult, Step
 
 # Bump on ANY change to cleaning behaviour (see CLAUDE.md §5 and §12).
-RULESET_VERSION = "1.0.0"
+RULESET_VERSION = "1.1.0"
 
 INFO, WARN, BLOCK = Severity.INFO, Severity.WARNING, Severity.BLOCKING
 
@@ -27,6 +27,7 @@ _RULE_TABLE: tuple[tuple[str, Severity, str], ...] = (
     ("ING-005", INFO, "Several sheets had data; the first visible one was used"),
     ("ING-006", WARN, "Row had more cells than headers; extra cells kept in _overflow"),
     ("ING-008", WARN, "Cell was too long and was shortened"),
+    ("ING-009", INFO, "No header row found; columns were recognized from their values"),
     ("ING-901", BLOCK, "The file could not be read. Please save it as .xlsx or .csv"),
     ("ING-902", BLOCK, "The file is too large (size, rows or columns)"),
     ("TXT-001", INFO, "Garbled characters repaired"),
@@ -35,7 +36,10 @@ _RULE_TABLE: tuple[tuple[str, Severity, str], ...] = (
     ("TXT-004", INFO, "Apostrophe normalized"),
     ("MAP-001", INFO, "Column matched automatically"),
     ("MAP-002", INFO, "Column not matched; kept as an extra column"),
+    ("MAP-003", INFO, "Column header did not match its values; matched by its values"),
+    ("MAP-004", INFO, "Column repeats a field that is already used; kept as an extra column"),
     ("MAP-901", BLOCK, "No email or phone column was chosen"),
+    ("SRC-001", INFO, "The same file was uploaded twice; the copy was ignored"),
     ("PLC-001", INFO, "Placeholder value removed"),
     ("NAM-001", INFO, "Capitalization fixed"),
     ("NAM-002", INFO, "Title moved to salutation"),
@@ -71,12 +75,16 @@ _RULE_TABLE: tuple[tuple[str, Severity, str], ...] = (
     ("OPT-003", INFO, "Consent is unknown"),
     ("OPT-004", WARN, "Opt-out or consent value not recognized"),
     ("OPT-005", WARN, "Opt-out and consent columns contradict each other"),
+    ("OPT-006", WARN, "This email address opted out in another row; removed as well"),
     ("DUP-001", INFO, "Merged with a duplicate: same email"),
     ("DUP-002", INFO, "Merged with a duplicate: same phone and similar name"),
     ("DUP-003", WARN, "Possible duplicate, not merged"),
     ("DUP-004", WARN, "Duplicate group too uncertain to merge automatically"),
     ("DUP-005", INFO, "Shares a phone number with a different person"),
-    ("DUP-006", INFO, "Conflicting value found while merging duplicates"),
+    ("DUP-006", INFO, "Conflicting values while merging; kept the more complete or newer one"),
+    ("DUP-007", WARN, "Same email address used by people with different names; not merged"),
+    ("DUP-008", WARN, "Same name in another file but different details; kept as different people"),
+    ("DUP-009", INFO, "Merged with the same person from another file: same name, matching details"),
     ("ROW-001", BLOCK, "No usable email or phone"),
     ("ROW-002", BLOCK, "No email address, so it cannot receive the newsletter"),
 )
@@ -106,7 +114,11 @@ class StageLog:
     def change(self, record: Record, field: str, old: str, new: str, code: str) -> None:
         get_rule(code)
         if old != new:
-            self._changes.append(Change(record.record_id, record.source_row, field, old, new, code))
+            self._changes.append(
+                Change(
+                    record.record_id, record.source_row, field, old, new, code, record.source_file
+                )
+            )
 
     def steps(self, record: Record, field: str, steps: Iterable[Step]) -> None:
         for step in steps:

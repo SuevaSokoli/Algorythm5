@@ -56,7 +56,7 @@ def completed_job(client: TestClient) -> str:
 
 def test_health_rules_and_security_headers(client: TestClient) -> None:
     response = client.get("/api/health")
-    assert response.json() == {"status": "ok", "ruleset_version": "1.0.0"}
+    assert response.json() == {"status": "ok", "ruleset_version": "1.1.0"}
     assert response.headers["cache-control"] == "no-store"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-content-type-options"] == "nosniff"
@@ -97,7 +97,7 @@ def test_full_flow(client: TestClient) -> None:
     assert client.post(f"/api/jobs/{job_id}/run").status_code == 409  # cannot run twice
 
     summary = client.get(f"/api/jobs/{job_id}/summary").json()
-    assert summary["rows_out"] == 2 and summary["ruleset_version"] == "1.0.0"
+    assert summary["rows_out"] == 2 and summary["ruleset_version"] == "1.1.0"
     assert summary["top_rules"][0]["explanation"]
 
     changes = client.get(f"/api/jobs/{job_id}/changes", params={"page_size": 2}).json()
@@ -117,7 +117,10 @@ def test_full_flow(client: TestClient) -> None:
     assert report.status_code == 200
     assert "klientet_A5_" in report.headers["content-disposition"]
     sheets = load_workbook(io.BytesIO(report.content)).sheetnames
-    assert sheets == ["Summary", "Clean", "Review", "Changes", "Suppressed", "Rejected"]
+    assert sheets == [
+        "Summary", "Clean", "Review", "Changes", "Suppressed", "Rejected", "Files", "Merges",
+        "Same name, different people",
+    ]  # fmt: skip
     clean = client.get(f"/api/jobs/{job_id}/files/clean_csv")
     assert clean.content.startswith(b"\xef\xbb\xbf")
     assert "Tiranë" in clean.content.decode("utf-8-sig")
@@ -265,7 +268,7 @@ def test_failed_run_marks_job_failed(client: TestClient, monkeypatch: pytest.Mon
     def broken(*_: object, **__: object) -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("algorythm5.services.jobs.run_pipeline", broken)
+    monkeypatch.setattr("algorythm5.services.jobs.run_sources", broken)
     client.post(f"/api/jobs/{job_id}/run")
     job = client.get(f"/api/jobs/{job_id}").json()
     assert (job["status"], job["error_code"]) == ("failed", "INTERNAL")
@@ -295,3 +298,38 @@ def test_retention_purges_on_startup(tmp_path: Path) -> None:
 def test_filename_sanitising(raw: str, display: str, stem: str) -> None:
     assert display_filename(raw) == display
     assert download_stem(raw) == stem
+
+
+def test_multi_file_upload_merges_into_one_clean_file(client: TestClient) -> None:
+    crm = "Emri;Mbiemri;Email;Tel\nAna;Hoxha;ana.hoxha@gmail.com;0692345678\n".encode("cp1252")
+    shop = b"Phone,Last name,First name,City\n+355 69 234 5678,HOXHA,ANA,Fier\n"
+    files = [
+        ("files", ("crm.csv", crm, "text/csv")),
+        ("files", ("shop.csv", shop, "text/csv")),
+        ("files", ("crm.csv", crm, "text/csv")),  # same file again
+    ]
+    created = client.post("/api/jobs", files=files).json()
+    assert [(f["filename"], f["duplicate_of"]) for f in created["files"]] == [
+        ("crm.csv", None),
+        ("shop.csv", None),
+        ("crm (2).csv", 0),
+    ]
+    job_id = created["job_id"]
+    columns = [
+        {"file_index": f["index"], "index": c["index"], "target_field": c["target_field"]}
+        for f in created["files"]
+        for c in f["columns"]
+    ]
+    assert client.put(f"/api/jobs/{job_id}/mapping", json={"columns": columns}).status_code == 200
+    assert client.post(f"/api/jobs/{job_id}/run").status_code == 202
+
+    job = client.get(f"/api/jobs/{job_id}").json()
+    assert job["status"] == "completed"
+    assert job["counts"] == {"FIXED": 1, "MERGED": 1}
+    per_file = {f["filename"]: f["counts"] for f in job["files"]}
+    assert per_file == {"crm.csv": {"FIXED": 1}, "shop.csv": {"MERGED": 1}, "crm (2).csv": {}}
+    clean = client.get(f"/api/jobs/{job_id}/files/clean_csv").content.decode("utf-8-sig")
+    assert "crm.csv:2; shop.csv:2" in clean
+    report = client.get(f"/api/jobs/{job_id}/files/report_xlsx")
+    merges = load_workbook(io.BytesIO(report.content))["Merges"]
+    assert merges.max_row == 2  # header + one merged record

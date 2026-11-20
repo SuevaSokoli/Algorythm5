@@ -41,14 +41,27 @@ FieldName = Annotated[str | None, Query(max_length=200)]
 
 @router.post("", status_code=201)
 def create_job(
-    request: Request, service: Service, file: Annotated[UploadFile, File()]
+    request: Request,
+    service: Service,
+    files: Annotated[list[UploadFile] | None, File()] = None,
+    file: Annotated[UploadFile | None, File()] = None,
 ) -> JobCreatedOut:
-    limit: int = request.app.state.settings.max_upload_bytes
-    data = file.file.read(limit + 1)
-    if len(data) > limit:
-        raise AppError("ING-902", "The file is too large (size, rows or columns).", 413)
-    created = service.create_job(file.filename or "", data)
-    return JobCreatedOut.model_validate(created)
+    """Upload one file (`file`) or several (`files`); they become one job."""
+    settings = request.app.state.settings
+    limit: int = settings.max_upload_bytes
+    chosen = [*(files or []), *([file] if file else [])]
+    if len(chosen) > settings.max_files:
+        message = f"Please upload at most {settings.max_files} files at once."
+        raise AppError("TOO_MANY_FILES", message, 413)
+    uploads: list[tuple[str, bytes]] = []
+    for upload in chosen:
+        data = upload.file.read(limit + 1)
+        name = upload.filename or ""
+        if len(data) > limit:
+            message = "The file is too large (size, rows or columns)."
+            raise AppError("ING-902", f"{name}: {message}" if name else message, 413)
+        uploads.append((name, data))
+    return JobCreatedOut.model_validate(service.create_job(uploads))
 
 
 @router.get("/{job_id}")
@@ -58,16 +71,18 @@ def get_job(job_id: UUID4, service: Service) -> JobOut:
 
 @router.put("/{job_id}/mapping")
 def update_mapping(job_id: UUID4, body: MappingIn, service: Service) -> MappingOut:
-    targets = {column.index: column.target_field for column in body.columns}
+    targets = {(c.file_index, c.index): c.target_field for c in body.columns}
     rows = service.update_mapping(str(job_id), targets)
     return MappingOut(
         columns=[
             ColumnOut(
+                file_index=r.file_index,
                 index=r.source_index,
                 header=r.source_header,
                 target_field=r.target_field,
                 method=r.method,
                 confidence=r.confidence,
+                reason=r.reason,
             )
             for r in rows
         ]

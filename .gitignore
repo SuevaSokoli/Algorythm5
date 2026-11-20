@@ -14,7 +14,7 @@ dist/
 htmlcov/
 
 # Runtime data: personal data, never commit
-data/
+/data/
 *.db
 *.db-wal
 *.db-shm

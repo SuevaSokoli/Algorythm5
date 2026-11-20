@@ -64,7 +64,7 @@ def test_migrations_are_idempotent(database: Database) -> None:
     assert database.migrate() == []
     with database.transaction() as connection:
         versions = [r[0] for r in connection.execute("SELECT version FROM schema_migrations")]
-        assert versions == [1]
+        assert versions == [1, 2]
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 

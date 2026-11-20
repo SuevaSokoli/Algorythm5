@@ -13,7 +13,7 @@ from typing import Literal
 import charset_normalizer
 from openpyxl import load_workbook
 
-from algorythm5.cleaning.mapping import is_known_header
+from algorythm5.cleaning.mapping import is_known_header, looks_like_data_row
 from algorythm5.cleaning.models import (
     IngestionMeta,
     Issue,
@@ -34,6 +34,7 @@ MAX_EXACT_FLOAT = 2**53
 OVERFLOW_COLUMN = "_overflow"
 OVERFLOW_SEPARATOR = " | "
 TRUNCATION_PREVIEW_CHARS = 100
+NO_HEADER = -1  # header_row_index of a file without a header row
 
 Grid = list[list[str]]
 
@@ -192,7 +193,11 @@ def _is_text(cell: str) -> bool:
 
 
 def find_header_row(grid: Grid) -> int:
-    """Index of the header row: first early row that is mostly text and names a known column."""
+    """Index of the header row: first early row that is mostly text and names a known column.
+
+    Returns NO_HEADER when the file has no header at all (its first row already holds
+    customer values such as emails or phones); columns are then recognised by their values.
+    """
     non_empty = [i for i, row in enumerate(grid) if any(c.strip() for c in row)]
     for index in non_empty[:HEADER_SCAN_ROWS]:
         cells = [c for c in grid[index] if c.strip()]
@@ -201,6 +206,8 @@ def find_header_row(grid: Grid) -> int:
             return index
     if not non_empty:
         raise PipelineError("ING-901", "file is empty")
+    if looks_like_data_row(grid[non_empty[0]]):
+        return NO_HEADER
     return non_empty[0]
 
 
@@ -236,12 +243,18 @@ def build_table(
     issues: Sequence[Issue] = (),
 ) -> Table:
     header_index = find_header_row(grid)
-    raw_headers = grid[header_index]
-    body = grid[header_index + 1 :]
+    found: list[Issue] = list(issues)
+    if header_index == NO_HEADER:
+        width = max((len(row) for row in grid), default=0)
+        raw_headers: Sequence[str] = [""] * width
+        body = grid
+        found.append(_issue("ING-009"))
+    else:
+        raw_headers = grid[header_index]
+        body = grid[header_index + 1 :]
     headers = _trim_trailing_empty(unique_headers(raw_headers), raw_headers, body)
     if len(headers) > settings.max_columns:
         raise PipelineError("ING-902", f"more than {settings.max_columns} columns")
-    found: list[Issue] = list(issues)
     if header_index > 0:
         found.append(_issue("ING-003", detail=f"line {header_index + 1}"))
     rows: list[RawRow] = []

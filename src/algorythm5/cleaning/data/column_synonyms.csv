@@ -1,0 +1,151 @@
+# Header synonyms (English + Albanian). Compared after normalisation:
+# lowercase, accents stripped, punctuation/underscores turned into spaces.
+synonym,field
+id,customer_id
+customer id,customer_id
+customer number,customer_id
+customer no,customer_id
+client id,customer_id
+klient id,customer_id
+kodi,customer_id
+kodi klientit,customer_id
+nr klienti,customer_id
+account id,customer_id
+salutation,salutation
+title,salutation
+titulli,salutation
+first name,first_name
+firstname,first_name
+given name,first_name
+forename,first_name
+fname,first_name
+emri,first_name
+emer,first_name
+last name,last_name
+lastname,last_name
+surname,last_name
+family name,last_name
+lname,last_name
+mbiemri,last_name
+mbiemer,last_name
+name,full_name
+full name,full_name
+fullname,full_name
+customer name,full_name
+client name,full_name
+contact name,full_name
+emri i plote,full_name
+emri dhe mbiemri,full_name
+emri mbiemri,full_name
+emer mbiemer,full_name
+klienti,full_name
+email,email
+e mail,email
+mail,email
+email address,email
+e mail address,email
+emaili,email
+adresa email,email
+adresa e emailit,email
+posta elektronike,email
+phone,phone
+telephone,phone
+tel,phone
+telefon,phone
+telefoni,phone
+phone number,phone
+tel nr,phone
+nr tel,phone
+numri i telefonit,phone
+numer telefoni,phone
+contact number,phone
+landline,phone
+fiks,phone
+mobile,mobile
+mobile phone,mobile
+cell,mobile
+cellphone,mobile
+cell phone,mobile
+celular,mobile
+celulari,mobile
+cel,mobile
+mob,mobile
+gsm,mobile
+extension,phone_extension
+ext,phone_extension
+brendshme,phone_extension
+nr i brendshem,phone_extension
+company,company
+company name,company
+organization,company
+organisation,company
+firm,company
+business,company
+kompania,company
+firma,company
+biznesi,company
+shoqeria,company
+street,street
+address,street
+street address,street
+address line 1,street
+adresa,street
+rruga,street
+postal code,postal_code
+postcode,postal_code
+zip,postal_code
+zip code,postal_code
+kodi postar,postal_code
+city,city
+town,city
+qyteti,city
+qytet,city
+vendbanimi,city
+country,country
+shteti,country
+vendi,country
+birth date,birth_date
+birthdate,birth_date
+date of birth,birth_date
+dob,birth_date
+birthday,birth_date
+datelindja,birth_date
+data e lindjes,birth_date
+ditelindja,birth_date
+signup date,signup_date
+sign up date,signup_date
+registration date,signup_date
+registered,signup_date
+created,signup_date
+created at,signup_date
+date joined,signup_date
+joined,signup_date
+data e regjistrimit,signup_date
+regjistruar,signup_date
+opt out,opt_out
+optout,opt_out
+unsubscribed,opt_out
+unsubscribe,opt_out
+do not email,opt_out
+dnc,opt_out
+cabonuar,opt_out
+cabonim,opt_out
+consent,consent
+newsletter,consent
+subscribed,consent
+opt in,consent
+optin,consent
+marketing consent,consent
+pelqim,consent
+pelqimi,consent
+abonuar,consent
+abonim,consent
+notes,notes
+note,notes
+comment,notes
+comments,notes
+remarks,notes
+shenime,notes
+shenim,notes
+koment,notes
+komente,notes

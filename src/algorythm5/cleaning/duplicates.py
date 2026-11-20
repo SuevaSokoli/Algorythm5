@@ -1,4 +1,9 @@
-"""Stage 8: duplicate detection (blocking + tiers), safety brake, and merging."""
+"""Stage 8: duplicate detection (blocking + tiers), safety brake, and merging.
+
+Within the job, records are compared only when they share a blocking key. Records with the
+same first and last name from *different files* are judged on their details (email, phone,
+birth date, address): matching details merge, conflicting details mean different people.
+"""
 
 from __future__ import annotations
 
@@ -29,18 +34,42 @@ MERGEABLE_FIELDS = (
     "phone_extension", "phone_other", "company", "street", "postal_code", "city", "country",
     "birth_date", "signup_date", "notes",
 )  # fmt: skip
+# Plain-language names of the details compared for same-name records from different files.
+DETAIL_LABELS = {
+    "email": "email",
+    "phone": "phone",
+    "birth_date": "birth date",
+    "address": "address",
+}
+# Tiers that merge automatically, and the rule code each one logs (first match wins).
+MERGE_TIER_CODES = (("T1", "DUP-001"), ("T2", "DUP-002"), ("T4", "DUP-009"))
 _E164 = re.compile(r"^\+\d{6,15}$")
+_NOT_ALNUM = re.compile(r"[\W_]+")
+
+AGREE, CONFLICT, WEAK = "agree", "conflict", "weak"
 
 
 @dataclass(frozen=True, slots=True)
 class PairMatch:
-    tier: str  # "T1", "T2", "T3", "SHARED_PHONE"
+    tier: str  # "T1", "T2", "T3", "T4", "SHARED_PHONE", "DIFFERENT"
     first: int
     second: int
 
 
+@dataclass(frozen=True, slots=True)
+class DetailComparison:
+    agree: tuple[str, ...]
+    conflict: tuple[str, ...]
+
+
 def _split(value: str) -> list[str]:
     return [v for v in value.split(LIST_SEPARATOR) if v]
+
+
+def position(record: Record) -> int:
+    """Upload order: later files (and later rows) have higher record numbers = newer data."""
+    digits = record.record_id.lstrip("R")
+    return int(digits) if digits.isdigit() else 0
 
 
 def emails_of(record: Record) -> set[str]:
@@ -66,6 +95,53 @@ def name_ratio(a: Record, b: Record) -> float | None:
     return fuzz.token_sort_ratio(first, second)
 
 
+def same_name_other_file(a: Record, b: Record) -> bool:
+    """Same first and last name (ignoring case and accents), coming from two different files."""
+    if not a.source_file or not b.source_file or a.source_file == b.source_file:
+        return False
+    names = [(fold(r.get("first_name")), fold(r.get("last_name"))) for r in (a, b)]
+    return all(names[0]) and names[0] == names[1]
+
+
+def _compact(value: str) -> str:
+    return _NOT_ALNUM.sub("", fold(value))
+
+
+def _compare_sets(first: set[str], second: set[str]) -> str | None:
+    if not first or not second:
+        return None
+    return AGREE if first & second else CONFLICT
+
+
+def _compare_values(first: str, second: str) -> str | None:
+    if not first or not second:
+        return None
+    return AGREE if _compact(first) == _compact(second) else CONFLICT
+
+
+def _compare_address(a: Record, b: Record) -> str | None:
+    """Street, else postal code, decides; a matching city alone is too weak to merge on."""
+    for field in ("street", "postal_code"):
+        verdict = _compare_values(a.get(field), b.get(field))
+        if verdict:
+            return verdict
+    verdict = _compare_values(a.get("city"), b.get("city"))
+    return WEAK if verdict == AGREE else verdict
+
+
+def compare_details(a: Record, b: Record) -> DetailComparison:
+    verdicts = {
+        "email": _compare_sets(emails_of(a), emails_of(b)),
+        "phone": _compare_sets(phones_of(a), phones_of(b)),
+        "birth_date": _compare_values(a.get("birth_date"), b.get("birth_date")),
+        "address": _compare_address(a, b),
+    }
+    return DetailComparison(
+        agree=tuple(f for f, v in verdicts.items() if v == AGREE),
+        conflict=tuple(f for f, v in verdicts.items() if v == CONFLICT),
+    )
+
+
 def blocking_keys(record: Record) -> set[str]:
     keys = {f"e:{e}" for e in emails_of(record)} | {f"p:{p}" for p in phones_of(record)}
     first, last = fold(record.get("first_name")), fold(record.get("last_name"))
@@ -89,6 +165,11 @@ def _supporting_match(a: Record, b: Record) -> bool:
 
 def classify_pair(a: Record, b: Record) -> str | None:
     """Tier of a candidate pair (see CLAUDE.md §5 Duplicates), or None."""
+    if same_name_other_file(a, b):
+        details = compare_details(a, b)
+        if details.conflict:
+            return "DIFFERENT"
+        return "T4" if details.agree else "T3"
     if emails_of(a) & emails_of(b):
         return "T1"
     ratio = name_ratio(a, b)
@@ -115,17 +196,30 @@ class _UnionFind:
             self.parent[max(root_a, root_b)] = min(root_a, root_b)
 
 
-def brake_reason(cluster: Sequence[Record]) -> str | None:
+@dataclass(frozen=True, slots=True)
+class Brake:
+    rule_code: str
+    reason: str
+
+
+def brake_reason(
+    cluster: Sequence[Record], different: Iterable[frozenset[str]] = ()
+) -> Brake | None:
     """Why a cluster must not be merged automatically, if any."""
     if len(cluster) > MAX_CLUSTER_SIZE:
-        return f"more than {MAX_CLUSTER_SIZE} records"
+        return Brake("DUP-004", f"more than {MAX_CLUSTER_SIZE} records")
+    ids = {r.record_id for r in cluster}
+    if any(pair <= ids for pair in different):
+        return Brake("DUP-004", "it contains people with the same name but different details")
     primaries = {r.get("email") for r in cluster if r.get("email")}
     if len(primaries) > 1:
-        return "different email addresses"
+        return Brake("DUP-004", "different email addresses")
     for a, b in combinations(cluster, 2):
         ratio = name_ratio(a, b)
         if ratio is not None and ratio < BRAKE_NAME_RATIO:
-            return "names are too different"
+            if emails_of(a) & emails_of(b):
+                return Brake("DUP-007", "names are too different")
+            return Brake("DUP-004", "names are too different")
     return None
 
 
@@ -135,7 +229,7 @@ def _filled_count(record: Record) -> int:
 
 def choose_survivor(cluster: Sequence[Record]) -> Record:
     """Most filled fields wins; ties go to the lowest source row."""
-    return min(cluster, key=lambda r: (-_filled_count(r), r.source_row))
+    return min(cluster, key=lambda r: (-_filled_count(r), position(r), r.source_row))
 
 
 def _merge_consent(cluster: Iterable[Record]) -> str:
@@ -153,29 +247,100 @@ def _append_unique(current: str, *additions: str) -> str:
     return LIST_SEPARATOR.join(items)
 
 
+def resolve_conflict(mine: str, theirs: str, theirs_is_newer: bool) -> tuple[str, str]:
+    """(value to keep, why): the more complete value, otherwise the newer one."""
+    compact_mine, compact_theirs = _compact(mine), _compact(theirs)
+    if compact_mine and compact_mine in compact_theirs:
+        return theirs, "more complete"
+    if compact_theirs and compact_theirs in compact_mine:
+        return mine, "more complete"
+    return (theirs, "newer") if theirs_is_newer else (mine, "newer")
+
+
+class _Merger:
+    """Folds the other members of a cluster into the survivor, logging every decision."""
+
+    def __init__(self, survivor: Record, rule_code: str, log: StageLog) -> None:
+        self.survivor = survivor
+        self.rule_code = rule_code
+        self.log = log
+        self.values = dict(survivor.values)
+        self.extras = dict(survivor.extras)
+        # Which record (by position) supplied each current value; decides "newer".
+        self.origin: dict[str, int] = {}
+
+    def _newer(self, key: str, other: Record) -> bool:
+        return position(other) > self.origin.get(key, position(self.survivor))
+
+    def _resolve(self, target: dict[str, str], key: str, other: Record, theirs: str) -> None:
+        mine = target.get(key, "")
+        kept, why = resolve_conflict(mine, theirs, self._newer(key, other))
+        dropped = mine if kept == theirs else theirs
+        detail = f"kept '{kept}' ({why}), set aside '{dropped}'"
+        self.log.issue(self.survivor, key, "DUP-006", original_value=dropped, detail=detail)
+        if kept == theirs:
+            target[key] = theirs
+            self.origin[key] = position(other)
+            self.log.change(self.survivor, key, mine, theirs, self.rule_code)
+
+    def field(self, other: Record, field: str) -> None:
+        mine, theirs = self.values.get(field, ""), other.get(field)
+        if not theirs or fold(mine) == fold(theirs):
+            return
+        if field in MERGE_FIELDS_BY_LIST:
+            self.values[field] = _append_unique(mine, theirs)
+        elif not mine:
+            self.values[field] = theirs
+            self.origin[field] = position(other)
+        elif field in ("email", "phone"):
+            target = f"{field}_other"
+            before = self.values.get(target, "")
+            self.values[target] = _append_unique(before, theirs)
+            self.log.change(self.survivor, target, before, self.values[target], self.rule_code)
+            return
+        elif field == "signup_date" and theirs < mine:
+            self.values[field] = theirs  # the earliest sign-up is the real one
+        elif field == "signup_date":
+            return
+        else:
+            self._resolve(self.values, field, other, theirs)
+            return
+        self.log.change(self.survivor, field, mine, self.values[field], self.rule_code)
+
+    def passthrough(self, other: Record, header: str, value: str) -> None:
+        mine = self.extras.get(header, "")
+        if not value or fold(mine) == fold(value):
+            return
+        if not mine:
+            self.extras[header] = value
+            self.origin[header] = position(other)
+            self.log.change(self.survivor, header, "", value, self.rule_code)
+        else:
+            self._resolve(self.extras, header, other, value)
+
+
 def merge_cluster(
     cluster: Sequence[Record], rule_code: str, log: StageLog
 ) -> tuple[Record, list[Record]]:
     """Merge a cluster into its survivor; returns (survivor, absorbed members)."""
     survivor = choose_survivor(cluster)
-    others = sorted((r for r in cluster if r is not survivor), key=lambda r: r.source_row)
-    values = dict(survivor.values)
-    extras = dict(survivor.extras)
+    others = sorted((r for r in cluster if r is not survivor), key=position)
+    merger = _Merger(survivor, rule_code, log)
     for other in others:
         for field in MERGEABLE_FIELDS:
-            _merge_field(survivor, other, field, values, log, rule_code)
+            merger.field(other, field)
         for header, value in other.extras.items():
-            if value and not extras.get(header):
-                extras[header] = value
-                log.change(survivor, header, "", value, rule_code)
-            elif value and fold(value) != fold(extras.get(header, "")):
-                detail = f"kept '{extras[header]}', dropped value from {other.record_id}"
-                log.issue(survivor, header, "DUP-006", original_value=value, detail=detail)
+            merger.passthrough(other, header, value)
+    values = merger.values
     consent = _merge_consent(cluster)
     log.change(survivor, "consent_status", values.get("consent_status", ""), consent, rule_code)
     values["consent_status"] = consent
-    source_rows = tuple(sorted(row for r in cluster for row in r.source_rows))
-    merged = replace(survivor.with_values(values, extras), source_rows=source_rows)
+    origins = [origin for r in sorted(cluster, key=position) for origin in r.origins()]
+    merged = replace(
+        survivor.with_values(values, merger.extras),
+        source_rows=tuple(row for _, row in origins),
+        source_files=tuple(file for file, _ in origins),
+    )
     related = [r.record_id for r in others]
     log.issue(merged, None, rule_code, related=related)
     absorbed = []
@@ -185,34 +350,8 @@ def merge_cluster(
     return merged, absorbed
 
 
-def _merge_field(
-    survivor: Record,
-    other: Record,
-    field: str,
-    values: dict[str, str],
-    log: StageLog,
-    rule_code: str,
-) -> None:
-    mine, theirs = values.get(field, ""), other.get(field)
-    if not theirs or fold(mine) == fold(theirs):
-        return
-    if field in MERGE_FIELDS_BY_LIST:
-        values[field] = _append_unique(mine, theirs)
-    elif not mine:
-        values[field] = theirs
-    elif field in ("email", "phone"):
-        target = f"{field}_other"
-        before = values.get(target, "")
-        values[target] = _append_unique(before, theirs)
-        log.change(survivor, target, before, values[target], rule_code)
-        return
-    elif field == "signup_date" and theirs < mine:
-        values[field] = theirs
-    else:
-        detail = f"kept '{mine}', dropped value from {other.record_id}"
-        log.issue(survivor, field, "DUP-006", original_value=theirs, detail=detail)
-        return
-    log.change(survivor, field, mine, values[field], rule_code)
+def _merge_code(tiers: set[str]) -> str:
+    return next((code for tier, code in MERGE_TIER_CODES if tier in tiers), "DUP-001")
 
 
 def apply(records: Sequence[Record], settings: PipelineSettings) -> StageResult:
@@ -222,17 +361,21 @@ def apply(records: Sequence[Record], settings: PipelineSettings) -> StageResult:
     union = _UnionFind(len(items))
     tiers_by_root: dict[int, set[str]] = defaultdict(set)
     review_pairs: list[tuple[int, int]] = []
+    different_pairs: list[tuple[int, int]] = []
     for a, b in candidate_pairs(items):
         tier = classify_pair(items[a], items[b])
-        if tier in ("T1", "T2"):
+        if tier in ("T1", "T2", "T4"):
             union.union(a, b)
             tiers_by_root[min(a, b)].add(tier)
         elif tier == "T3":
             review_pairs.append((a, b))
+        elif tier == "DIFFERENT":
+            different_pairs.append((a, b))
         elif tier == "SHARED_PHONE":
             log.issue(items[a], "phone", "DUP-005", related=[items[b].record_id])
             log.issue(items[b], "phone", "DUP-005", related=[items[a].record_id])
-    position = {record.record_id: index for index, record in enumerate(items)}
+    different = [frozenset((items[a].record_id, items[b].record_id)) for a, b in different_pairs]
+    position_of = {record.record_id: index for index, record in enumerate(items)}
     clusters: dict[int, list[int]] = defaultdict(list)
     for index in range(len(items)):
         clusters[union.find(index)].append(index)
@@ -243,25 +386,32 @@ def apply(records: Sequence[Record], settings: PipelineSettings) -> StageResult:
         if len(members) < MIN_CLUSTER_SIZE:
             continue
         cluster = [items[i] for i in members]
-        reason = brake_reason(cluster)
-        if reason:
+        brake = brake_reason(cluster, different)
+        if brake:
             ids = [r.record_id for r in cluster]
             for record in cluster:
                 others = [i for i in ids if i != record.record_id]
-                log.issue(record, None, "DUP-004", detail=reason, related=others)
+                log.issue(record, None, brake.rule_code, detail=brake.reason, related=others)
             continue
-        code = "DUP-001" if "T1" in tier_of_cluster[root] else "DUP-002"
-        survivor, absorbed = merge_cluster(cluster, code, log)
+        survivor, absorbed = merge_cluster(cluster, _merge_code(tier_of_cluster[root]), log)
         for member in (survivor, *absorbed):
-            items[position[member.record_id]] = member
-    _flag_review_pairs(items, review_pairs, log)
+            items[position_of[member.record_id]] = member
+    _flag_pairs(items, review_pairs, log)
+    _flag_pairs(items, different_pairs, log, different=True)
     return log.result(items)
 
 
-def _flag_review_pairs(
-    items: Sequence[Record], pairs: Iterable[tuple[int, int]], log: StageLog
+def _flag_pairs(
+    items: Sequence[Record],
+    pairs: Iterable[tuple[int, int]],
+    log: StageLog,
+    *,
+    different: bool = False,
 ) -> None:
-    """DUP-003 for probable duplicates, pointing at survivors when a member was merged."""
+    """DUP-003 (possible duplicate) or DUP-008 (same name, different people) on both records.
+
+    Points at survivors when a member was merged into another record.
+    """
     by_id = {r.record_id: r for r in items}
 
     def resolve(record: Record) -> Record:
@@ -270,9 +420,19 @@ def _flag_review_pairs(
     seen: set[tuple[str, str]] = set()
     for a, b in pairs:
         first, second = resolve(items[a]), resolve(items[b])
-        key = tuple(sorted((first.record_id, second.record_id)))
+        key = (min(first.record_id, second.record_id), max(first.record_id, second.record_id))
         if first.record_id == second.record_id or key in seen:
             continue
-        seen.add((key[0], key[1]))
-        log.issue(first, None, "DUP-003", related=[second.record_id])
-        log.issue(second, None, "DUP-003", related=[first.record_id])
+        seen.add(key)
+        if not different:
+            log.issue(first, None, "DUP-003", related=[second.record_id])
+            log.issue(second, None, "DUP-003", related=[first.record_id])
+            continue
+        conflict = compare_details(items[a], items[b]).conflict
+        detail = "different " + ", ".join(DETAIL_LABELS[f] for f in conflict)
+        for record, other in ((first, second), (second, first)):
+            name = f"{record.get('first_name')} {record.get('last_name')}".strip()
+            log.issue(
+                record, None, "DUP-008", original_value=name, detail=detail,
+                related=[other.record_id],
+            )  # fmt: skip

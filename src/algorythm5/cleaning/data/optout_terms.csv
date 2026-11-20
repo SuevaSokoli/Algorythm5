@@ -1,0 +1,45 @@
+# Opt-out / consent vocabulary, compared lowercase with accents stripped.
+# affirmative/negative depend on the column (opt_out vs consent); opted_out/subscribed do not.
+# note_phrase: wording in notes or extra columns that suppresses the row as a precaution.
+term,category
+yes,affirmative
+y,affirmative
+true,affirmative
+1,affirmative
+x,affirmative
+po,affirmative
+no,negative
+n,negative
+false,negative
+0,negative
+jo,negative
+unsubscribed,opted_out
+unsubscribe,opted_out
+opt-out,opted_out
+opt out,opted_out
+optout,opted_out
+opted out,opted_out
+opted-out,opted_out
+dnc,opted_out
+do not email,opted_out
+do not contact,opted_out
+cabonuar,opted_out
+c'abonuar,opted_out
+i cabonuar,opted_out
+mos dergo,opted_out
+mos dergoni,opted_out
+cregjistruar,opted_out
+subscribed,subscribed
+opt-in,subscribed
+opt in,subscribed
+optin,subscribed
+opted in,subscribed
+abonuar,subscribed
+i abonuar,subscribed
+unsubscribe,note_phrase
+do not contact,note_phrase
+do not email,note_phrase
+remove from list,note_phrase
+mos me dergoni,note_phrase
+mos dergo,note_phrase
+cregjistro,note_phrase

@@ -21,7 +21,7 @@ def test_codes_are_well_formed_and_unique() -> None:
     codes = [code for code, _, _ in rules._RULE_TABLE]
     assert len(codes) == len(set(codes))
     assert all(
-        re.fullmatch(r"(ING|TXT|MAP|PLC|NAM|PHN|EML|DAT|OPT|DUP|ROW)-\d{3}", c) for c in codes
+        re.fullmatch(r"(ING|TXT|MAP|SRC|PLC|NAM|PHN|EML|DAT|OPT|DUP|ROW)-\d{3}", c) for c in codes
     )
 
 

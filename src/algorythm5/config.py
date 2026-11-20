@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("data")
     max_upload_mb: int = Field(default=10, ge=1, le=100)
+    max_files: int = Field(default=10, ge=1, le=50)
     max_rows: int = Field(default=50_000, ge=1, le=500_000)
     max_columns: int = Field(default=100, ge=1, le=1_000)
     max_cell_chars: int = Field(default=1_000, ge=10, le=100_000)

@@ -23,14 +23,18 @@ from algorythm5.cleaning import (
     PipelineError,
     PipelineResult,
     PipelineSettings,
+    SourceFile,
+    Table,
     build_outputs,
+    find_duplicate_sources,
     get_rule,
     has_contact_field,
     ingest,
     propose_mapping,
-    run_pipeline,
+    run_sources,
     validate_targets,
 )
+from algorythm5.cleaning.export import format_source_rows
 from algorythm5.cleaning.ingestion import detect_kind
 from algorythm5.cleaning.status import CLEAN_FILE_STATUSES
 from algorythm5.config import Settings
@@ -40,6 +44,8 @@ from algorythm5.db.repositories import (
     ChangeRow,
     IssueRepository,
     IssueRow,
+    JobFileRepository,
+    JobFileRow,
     JobRepository,
     JobRow,
     MappingRepository,
@@ -97,10 +103,29 @@ class ColumnInfo:
     method: str
     confidence: float
     samples: list[str]
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class FileCreated:
+    index: int
+    filename: str
+    file_kind: str
+    encoding: str | None
+    delimiter: str | None
+    sheet_name: str | None
+    header_row_index: int
+    rows: int
+    duplicate_of: int | None
+    columns: list[ColumnInfo]
+    preview: list[dict[str, str]]
 
 
 @dataclass(frozen=True, slots=True)
 class JobCreated:
+    """Upload result. The top-level file fields describe the first file (kept for clients
+    that upload one file); `files` describes every file."""
+
     job_id: str
     file_kind: str
     encoding: str | None
@@ -109,6 +134,20 @@ class JobCreated:
     columns: list[ColumnInfo]
     preview: list[dict[str, str]]
     canonical_fields: list[str]
+    files: list[FileCreated]
+
+
+@dataclass(frozen=True, slots=True)
+class FileSummary:
+    index: int
+    filename: str
+    file_kind: str
+    encoding: str | None
+    delimiter: str | None
+    sheet_name: str | None
+    rows_in: int
+    duplicate_of: int | None
+    counts: dict[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +163,7 @@ class JobInfo:
     created_at: str
     completed_at: str | None
     expires_at: str
+    files: list[FileSummary]
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +233,20 @@ def display_filename(filename: str) -> str:
     return cleaned[:MAX_FILENAME_CHARS] or "upload"
 
 
+def unique_labels(names: list[str]) -> list[str]:
+    """Display names that tell files apart: a repeated name gets " (2)", " (3)" ..."""
+    seen: Counter[str] = Counter()
+    labels = []
+    for name in names:
+        seen[name] += 1
+        if seen[name] == 1:
+            labels.append(name)
+        else:
+            path = PurePosixPath(name)
+            labels.append(f"{path.stem} ({seen[name]}){path.suffix}")
+    return labels
+
+
 def download_stem(filename: str) -> str:
     stem = PurePosixPath(display_filename(filename)).stem
     safe = re.sub(r"[^\w.-]+", "_", stem, flags=re.ASCII).strip("._")
@@ -207,9 +261,37 @@ def _wrong_state(message: str) -> AppError:
     return AppError("JOB_STATE", message, 409)
 
 
-def _pipeline_error(error: PipelineError) -> AppError:
+def _pipeline_error(error: PipelineError, label: str | None = None) -> AppError:
     status = JOB_ERROR_STATUS.get(error.rule_code, 422)
-    return AppError(error.rule_code, get_rule(error.rule_code).explanation + ".", status)
+    message = get_rule(error.rule_code).explanation + "."
+    return AppError(error.rule_code, f"{label}: {message}" if label else message, status)
+
+
+def _file_created(
+    index: int,
+    label: str,
+    table: Table,
+    mappings: tuple[ColumnMapping, ...],
+    duplicate_of: int | None,
+) -> FileCreated:
+    columns = [
+        ColumnInfo(
+            m.index,
+            m.header,
+            m.target_field,
+            m.method,
+            m.confidence,
+            [r.cells[m.index] for r in table.rows if r.cells[m.index].strip()][:SAMPLE_VALUES],
+            m.reason,
+        )
+        for m in mappings
+    ]
+    preview = [dict(zip(table.headers, r.cells, strict=True)) for r in table.rows[:PREVIEW_ROWS]]
+    meta = table.meta
+    return FileCreated(
+        index, label, meta.file_kind, meta.encoding, meta.delimiter, meta.sheet_name,
+        meta.header_row_index, len(table.rows), duplicate_of, columns, preview,
+    )  # fmt: skip
 
 
 class JobService:
@@ -243,39 +325,74 @@ class JobService:
 
     # ----- use cases -----
 
-    def create_job(self, filename: str, data: bytes) -> JobCreated:
-        """Validate and ingest an upload, store it, and propose a column mapping."""
+    def _ingest_upload(
+        self, label: str, data: bytes, settings: PipelineSettings
+    ) -> tuple[str, Table]:
+        """Validate one upload; errors name the file when several were sent."""
         if len(data) > self._settings.max_upload_bytes:
-            raise _pipeline_error(PipelineError("ING-902"))
-        name = display_filename(filename)
-        extension = PurePosixPath(name).suffix.lower().lstrip(".")
+            raise _pipeline_error(PipelineError("ING-902"), label)
+        extension = PurePosixPath(label).suffix.lower().lstrip(".")
         if extension not in ("csv", "xlsx"):
-            raise AppError("UNSUPPORTED_TYPE", "Please upload a .csv or .xlsx file.", 415)
-        now = self._clock()
-        snapshot = self._snapshot()
+            raise AppError("UNSUPPORTED_TYPE", f"{label}: please upload a .csv or .xlsx file.", 415)
         try:
             if detect_kind(data) != extension:
                 raise PipelineError("ING-901", "content does not match the file extension")
-            table = ingest(data, self._pipeline_settings(snapshot, now.date()))
+            return extension, ingest(data, settings)
         except PipelineError as error:
-            raise _pipeline_error(error) from error
-        mappings = propose_mapping(table)
+            raise _pipeline_error(error, label) from error
+
+    def create_job(self, uploads: list[tuple[str, bytes]]) -> JobCreated:
+        """Validate and ingest one or more uploads, store them, and propose column mappings."""
+        if not uploads:
+            raise AppError("NO_FILE", "Please choose at least one file.", 400)
+        if len(uploads) > self._settings.max_files:
+            message = f"Please upload at most {self._settings.max_files} files at once."
+            raise AppError("TOO_MANY_FILES", message, 413)
+        now = self._clock()
+        snapshot = self._snapshot()
+        settings = self._pipeline_settings(snapshot, now.date())
+        labels = unique_labels([display_filename(name) for name, _ in uploads])
+        ingested = [
+            self._ingest_upload(label, data, settings)
+            for label, (_, data) in zip(labels, uploads, strict=True)
+        ]
+        tables = [table for _, table in ingested]
+        repeats = find_duplicate_sources(tables)
+        rows_in = sum(len(t.rows) for i, t in enumerate(tables) if i not in repeats)
+        if sum(len(t.rows) for t in tables) > self._settings.max_rows:
+            raise _pipeline_error(PipelineError("ING-902"))
         job_id = str(uuid.uuid4())
-        stored = self._storage.save_upload(job_id, extension, data)
+        file_rows: list[JobFileRow] = []
+        mapping_rows: list[MappingRow] = []
+        created: list[FileCreated] = []
+        for index, (label, (extension, table), (_, data)) in enumerate(
+            zip(labels, ingested, uploads, strict=True)
+        ):
+            stored = self._storage.save_upload(job_id, extension, data, index)
+            meta = table.meta
+            file_rows.append(
+                JobFileRow(index, label, meta.file_kind, stored, meta.encoding, meta.delimiter,
+                           meta.sheet_name, meta.header_row_index, len(table.rows),
+                           hashlib.sha256(data).hexdigest(), repeats.get(index))
+            )  # fmt: skip
+            mappings = propose_mapping(table)
+            mapping_rows.extend(_mapping_row(m, index) for m in mappings)
+            created.append(_file_created(index, label, table, mappings, repeats.get(index)))
+        first = file_rows[0]
         job = JobRow(
             id=job_id,
-            original_filename=name,
-            file_kind=table.meta.file_kind,
-            stored_upload_path=stored,
-            detected_encoding=table.meta.encoding,
-            detected_delimiter=table.meta.delimiter,
-            sheet_name=table.meta.sheet_name,
-            header_row_index=table.meta.header_row_index,
+            original_filename=first.original_filename,
+            file_kind=first.file_kind,
+            stored_upload_path=first.stored_upload_path,
+            detected_encoding=first.detected_encoding,
+            detected_delimiter=first.detected_delimiter,
+            sheet_name=first.sheet_name,
+            header_row_index=first.header_row_index,
             status="uploaded",
             error_code=None,
             settings_json=json.dumps(snapshot, sort_keys=True),
             ruleset_version=RULESET_VERSION,
-            rows_in=len(table.rows),
+            rows_in=rows_in,
             rows_out=None,
             created_at=now.isoformat(),
             started_at=None,
@@ -284,37 +401,35 @@ class JobService:
         )
         with self._db.transaction() as connection:
             JobRepository(connection).insert(job)
-            MappingRepository(connection).replace(job_id, [_mapping_row(m) for m in mappings])
-        logger.info("job %s created: %d rows, %s", job_id, len(table.rows), table.meta.file_kind)
-        columns = [
-            ColumnInfo(
-                m.index,
-                m.header,
-                m.target_field,
-                m.method,
-                m.confidence,
-                [r.cells[m.index] for r in table.rows if r.cells[m.index].strip()][:SAMPLE_VALUES],
-            )
-            for m in mappings
-        ]
-        preview = [
-            dict(zip(table.headers, r.cells, strict=True)) for r in table.rows[:PREVIEW_ROWS]
-        ]
+            JobFileRepository(connection).insert_many(job_id, file_rows)
+            MappingRepository(connection).replace(job_id, mapping_rows)
+        logger.info("job %s created: %d file(s), %d rows", job_id, len(uploads), rows_in)
+        head = created[0]
         return JobCreated(
             job_id,
-            table.meta.file_kind,
-            table.meta.encoding,
-            table.meta.sheet_name,
-            table.meta.header_row_index,
-            columns,
-            preview,
+            head.file_kind,
+            head.encoding,
+            head.sheet_name,
+            head.header_row_index,
+            head.columns,
+            head.preview,
             list(CANONICAL_FIELDS),
+            created,
         )
 
     def get_job(self, job_id: str) -> JobInfo:
         job = self._load_job(job_id)
         with self._db.transaction() as connection:
-            counts = RecordRepository(connection).status_counts(job_id)
+            records = RecordRepository(connection)
+            counts = records.status_counts(job_id)
+            by_file = records.status_counts_by_file(job_id)
+            job_files = JobFileRepository(connection).list(job_id)
+        files = [
+            FileSummary(f.file_index, f.original_filename, f.file_kind, f.detected_encoding,
+                        f.detected_delimiter, f.sheet_name, f.rows_in, f.duplicate_of,
+                        by_file.get(f.original_filename, {}))
+            for f in job_files
+        ]  # fmt: skip
         message = _error_message(job.error_code)
         return JobInfo(
             job.id,
@@ -328,31 +443,44 @@ class JobService:
             job.created_at,
             job.completed_at,
             job.expires_at,
+            files,
         )
 
-    def update_mapping(self, job_id: str, targets: dict[int, str | None]) -> list[MappingRow]:
-        """Confirm or edit the mapping. Columns not mentioned keep their proposed target."""
+    def update_mapping(
+        self, job_id: str, targets: dict[tuple[int, int], str | None]
+    ) -> list[MappingRow]:
+        """Confirm or edit the mapping, keyed by (file index, column index).
+
+        Columns not mentioned keep their proposed target. Every file that will be cleaned
+        (not a repeated upload) needs an email or phone column.
+        """
         job = self._load_job(job_id)
         if job.status not in ("uploaded", "mapped"):
             raise _wrong_state("The columns can't be changed after cleaning has started.")
         with self._db.transaction() as connection:
             current = MappingRepository(connection).list(job_id)
-        known = {m.source_index for m in current}
+            job_files = JobFileRepository(connection).list(job_id)
+        known = {(m.file_index, m.source_index) for m in current}
         if set(targets) - known:
             raise AppError(
                 "INVALID_MAPPING", "The mapping refers to a column that doesn't exist.", 422
             )
         updated = [
-            _apply_target(m, targets[m.source_index]) if m.source_index in targets else m
+            _apply_target(m, targets[key]) if (key := (m.file_index, m.source_index)) in targets
+            else m
             for m in current
-        ]
-        new_targets = [m.target_field for m in updated]
-        try:
-            validate_targets(new_targets)
-        except InvalidMappingError as error:
-            raise AppError("INVALID_MAPPING", str(error), 422) from error
-        if not has_contact_field(new_targets):
-            raise _pipeline_error(PipelineError("MAP-901"))
+        ]  # fmt: skip
+        for job_file in job_files:
+            if job_file.duplicate_of is not None:
+                continue
+            file_targets = [m.target_field for m in updated if m.file_index == job_file.file_index]
+            try:
+                validate_targets(file_targets)
+            except InvalidMappingError as error:
+                message = f"{job_file.original_filename}: {error}"
+                raise AppError("INVALID_MAPPING", message, 422) from error
+            if not has_contact_field(file_targets):
+                raise _pipeline_error(PipelineError("MAP-901"), job_file.original_filename)
         with self._db.transaction() as connection:
             MappingRepository(connection).replace(job_id, updated)
             JobRepository(connection).update(job_id, {"status": "mapped"})
@@ -383,10 +511,18 @@ class JobService:
         job = self._load_job(job_id)
         started = datetime.fromisoformat(job.started_at or self._clock().isoformat())
         settings = self._pipeline_settings(json.loads(job.settings_json), started.date())
-        table = ingest(self._storage.read(job.stored_upload_path), settings)
         with self._db.transaction() as connection:
-            mappings = [_column_mapping(m) for m in MappingRepository(connection).list(job_id)]
-        result = run_pipeline(table, mappings, settings)
+            job_files = JobFileRepository(connection).list(job_id)
+            mapping_rows = MappingRepository(connection).list(job_id)
+        sources = [
+            SourceFile(
+                f.original_filename,
+                ingest(self._storage.read(f.stored_upload_path), settings),
+                tuple(_column_mapping(m) for m in mapping_rows if m.file_index == f.file_index),
+            )
+            for f in job_files
+        ]
+        result = run_sources(sources, settings)
         outputs = build_outputs(result).as_dict()
         completed = self._clock()
         stem = f"{download_stem(job.original_filename)}_A5_{completed.astimezone():%Y%m%d-%H%M}"
@@ -512,10 +648,11 @@ def _error_message(code: str | None) -> str | None:
         return "Something went wrong while cleaning. Please try again."
 
 
-def _mapping_row(mapping: ColumnMapping) -> MappingRow:
+def _mapping_row(mapping: ColumnMapping, file_index: int = 0) -> MappingRow:
     return MappingRow(
-        mapping.index, mapping.header, mapping.target_field, mapping.method, mapping.confidence
-    )
+        mapping.index, mapping.header, mapping.target_field, mapping.method, mapping.confidence,
+        mapping.reason, file_index,
+    )  # fmt: skip
 
 
 def _column_mapping(row: MappingRow) -> ColumnMapping:
@@ -525,34 +662,38 @@ def _column_mapping(row: MappingRow) -> ColumnMapping:
     elif row.method == "sniffed":
         method = "sniffed"
     return ColumnMapping(
-        row.source_index, row.source_header, row.target_field, method, row.confidence
+        row.source_index, row.source_header, row.target_field, method, row.confidence, row.reason
     )
 
 
 def _apply_target(row: MappingRow, target: str | None) -> MappingRow:
     if target == row.target_field:
         return row
-    return MappingRow(row.source_index, row.source_header, target, "manual", 1.0)
+    return MappingRow(
+        row.source_index, row.source_header, target, "manual", 1.0, "manual", row.file_index
+    )
 
 
 def _record_rows(result: PipelineResult) -> list[RecordRow]:
-    raw_by_id = {r.record_id: r for r in result.table.rows}
+    raw_by_id = {
+        row.record_id: dict(zip(source.table.headers, row.cells, strict=True))
+        for source in result.sources
+        for row in source.table.rows
+    }
     rows = []
     for record in result.records:
-        raw = raw_by_id[record.record_id]
         clean = {**record.values, **record.extras}
         rows.append(
             RecordRow(
                 record.record_id,
                 record.source_row,
-                json.dumps(
-                    dict(zip(result.table.headers, raw.cells, strict=True)), ensure_ascii=False
-                ),
+                json.dumps(raw_by_id[record.record_id], ensure_ascii=False),
                 json.dumps(clean, ensure_ascii=False, sort_keys=True),
                 record.status.value if record.status else "OK",
                 record.get("consent_status") or None,
                 record.merged_into,
-                LIST_SEPARATOR.join(str(r) for r in record.source_rows),
+                format_source_rows(record, result.is_multi_file),
+                record.source_file,
             )
         )
     return rows
@@ -560,9 +701,10 @@ def _record_rows(result: PipelineResult) -> list[RecordRow]:
 
 def _change_rows(result: PipelineResult) -> list[ChangeRow]:
     return [
-        ChangeRow(c.record_id, c.source_row, c.field, c.old_value, c.new_value, c.rule_code, seq)
+        ChangeRow(c.record_id, c.source_row, c.field, c.old_value, c.new_value, c.rule_code, seq,
+                  c.source_file)
         for seq, c in enumerate(result.changes, start=1)
-    ]
+    ]  # fmt: skip
 
 
 def _issue_rows(result: PipelineResult) -> list[IssueRow]:

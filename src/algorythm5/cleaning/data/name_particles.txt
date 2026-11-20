@@ -1,0 +1,16 @@
+# Lowercased when not the first token of an all-caps / all-lowercase name.
+van
+von
+der
+den
+de
+di
+da
+del
+della
+la
+le
+du
+dos
+bin
+ibn

@@ -38,12 +38,28 @@ class RuleOut(BaseModel):
 
 
 class ColumnOut(FromAttributes):
+    file_index: int = 0
     index: int
     header: str
     target_field: str | None
     method: str
     confidence: float
+    reason: str = ""
     samples: list[str] = []
+
+
+class FileCreatedOut(FromAttributes):
+    index: int
+    filename: str
+    file_kind: str
+    encoding: str | None
+    delimiter: str | None
+    sheet_name: str | None
+    header_row_index: int
+    rows: int
+    duplicate_of: int | None
+    columns: list[ColumnOut]
+    preview: list[dict[str, str]]
 
 
 class JobCreatedOut(FromAttributes):
@@ -55,6 +71,19 @@ class JobCreatedOut(FromAttributes):
     columns: list[ColumnOut]
     preview: list[dict[str, str]]
     canonical_fields: list[str]
+    files: list[FileCreatedOut]
+
+
+class FileSummaryOut(FromAttributes):
+    index: int
+    filename: str
+    file_kind: str
+    encoding: str | None
+    delimiter: str | None
+    sheet_name: str | None
+    rows_in: int
+    duplicate_of: int | None
+    counts: dict[str, int]
 
 
 class JobOut(FromAttributes):
@@ -69,11 +98,13 @@ class JobOut(FromAttributes):
     created_at: str
     completed_at: str | None
     expires_at: str
+    files: list[FileSummaryOut] = []
 
 
 class MappingColumnIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    file_index: int = Field(default=0, ge=0, le=100)
     index: int = Field(ge=0, le=10_000)
     target_field: str | None = Field(default=None, max_length=64)
 

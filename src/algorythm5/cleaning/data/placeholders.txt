@@ -1,0 +1,28 @@
+# Values that mean "empty". Compared lowercase and trimmed (and with surrounding punctuation removed).
+n/a
+na
+n.a.
+none
+null
+nil
+undefined
+-
+--
+---
+.
+?
+??
+x
+xx
+xxx
+0
+00
+unknown
+test
+tbd
+asdf
+nuk ka
+ska
+s'ka
+pa
+nuk di

@@ -1,0 +1,17 @@
+# Leading titles moved to `salutation`. Variant is compared lowercase without a trailing dot.
+variant,canonical
+mr,Mr.
+mister,Mr.
+mrs,Mrs.
+ms,Ms.
+miss,Miss
+dr,Dr.
+prof,Prof.
+z,Z.
+zoti,Z.
+znj,Znj.
+zonja,Znj.
+zsh,Zsh.
+zonjusha,Zsh.
+ing,Ing.
+av,Av.

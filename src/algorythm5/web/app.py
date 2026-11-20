@@ -85,7 +85,7 @@ def create_app(settings: Settings | None = None, clock: Clock = utc_now) -> Fast
     app.state.job_service = JobService(database, storage, settings, clock)
     register_error_handlers(app)
 
-    upload_limit = settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES
+    upload_limit = settings.max_files * (settings.max_upload_bytes + MULTIPART_OVERHEAD_BYTES)
 
     @app.middleware("http")
     async def guard_and_headers(

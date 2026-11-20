@@ -1,0 +1,24 @@
+# Surnames written Mac + capital letter. Others (Mack, Macedo, Machado) keep normal casing.
+macarthur
+macaulay
+macbeth
+macdonald
+macdougall
+macfarlane
+macgillivray
+macgregor
+macintosh
+mackay
+mackenzie
+mackinnon
+mackintosh
+maclachlan
+maclaren
+maclean
+macleod
+macmillan
+macneil
+macneill
+macpherson
+macquarie
+macrae

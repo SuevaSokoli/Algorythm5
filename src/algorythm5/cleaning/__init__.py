@@ -19,9 +19,10 @@ from algorythm5.cleaning.models import (
     Record,
     RowStatus,
     Severity,
+    SourceFile,
     Table,
 )
-from algorythm5.cleaning.pipeline import run_pipeline
+from algorythm5.cleaning.pipeline import find_duplicate_sources, run_pipeline, run_sources
 from algorythm5.cleaning.rules import RULES, RULESET_VERSION, get_rule
 
 __all__ = [
@@ -39,14 +40,17 @@ __all__ = [
     "Record",
     "RowStatus",
     "Severity",
+    "SourceFile",
     "Table",
     "build_outputs",
+    "find_duplicate_sources",
     "get_rule",
     "has_contact_field",
     "ingest",
     "propose_mapping",
     "review_issues",
     "run_pipeline",
+    "run_sources",
     "status_counts",
     "validate_targets",
 ]

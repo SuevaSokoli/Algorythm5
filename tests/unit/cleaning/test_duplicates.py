@@ -89,13 +89,14 @@ def test_brake_different_primary_emails(settings: PipelineSettings) -> None:
     assert {i.rule_code for i in result.issues} == {"DUP-004"}
 
 
-def test_brake_names_too_different_in_cluster(settings: PipelineSettings) -> None:
+def test_same_email_different_names_is_not_merged(settings: PipelineSettings) -> None:
     records = [
         rec("R00001", 2, first_name="Ana", last_name="Hoxha", email="shared@gmail.com"),
         rec("R00002", 3, first_name="Zef", last_name="Prenga", email="shared@gmail.com"),
     ]
     result = duplicates.apply(records, settings)
-    assert {i.rule_code for i in result.issues} == {"DUP-004"}
+    assert all(r.merged_into is None for r in result.records)
+    assert {i.rule_code for i in result.issues} == {"DUP-007"}
     assert "names are too different" in result.issues[0].message
 
 
